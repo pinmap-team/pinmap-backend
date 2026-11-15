@@ -5,10 +5,15 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
-from place_server import lookup_place_address, resolve_missing_addresses, geocode_address, extract_one, ocr_named_places, request_json_with_retry, ai_extract, ai_post_summary, dedupe, compatible_place_addresses
+from place_server import lookup_place_address, resolve_missing_addresses, geocode_address, extract_one, ocr_named_places, request_json_with_retry, ai_extract, ai_post_summary, dedupe, compatible_place_addresses, valid_world_point
 
 
 class PlaceLookupTests(unittest.TestCase):
+    def test_invalid_numeric_coordinates_cannot_become_map_pins(self):
+        self.assertFalse(valid_world_point({'lat': float('nan'), 'lng': 126.9}))
+        self.assertFalse(valid_world_point({'lat': True, 'lng': 126.9}))
+        self.assertFalse(valid_world_point({'lat': 37.5, 'lng': float('inf')}))
+
     def test_ai_post_summary_returns_grounded_title_and_detail(self):
         output = {'candidates': [{'finishReason': 'STOP', 'content': {'parts': [
             {'text': '{"title":"서울 찜질방 11곳", "summary":"따뜻한 탕과 휴식 공간을 모아 소개해요. 서울 여러 지역에서 고를 수 있어요."}'}]}}]}
@@ -102,6 +107,69 @@ class PlaceLookupTests(unittest.TestCase):
         result = lookup_place_address('테스트 카페', {'GOOGLE_MAPS_API_KEY': 'test-key'}, opener)
         self.assertEqual(result['status'], 'ambiguous')
         self.assertEqual(len(result['candidates']), 2)
+
+    def test_empty_naver_search_falls_back_to_google_without_guessing_name(self):
+        called = []
+        def opener(request, timeout):
+            called.append(request.full_url)
+            if 'openapi.naver.com' in request.full_url:
+                return io.BytesIO(json.dumps({'total': 0, 'items': []}).encode())
+            self.assertIn('places.googleapis.com', request.full_url)
+            return io.BytesIO(json.dumps({'places': [
+                {'displayName': {'text': '다른 카페'}, 'formattedAddress': '서울 마포구 양화로 1'},
+                {'displayName': {'text': '테스트 카페'}, 'formattedAddress': '서울 마포구 양화로 2',
+                 'location': {'latitude': 37.55, 'longitude': 126.91}}
+            ]}).encode())
+        result = lookup_place_address('테스트 카페', {'NAVER_CLIENT_ID': 'id',
+            'NAVER_CLIENT_SECRET': 'secret', 'GOOGLE_MAPS_API_KEY': 'key'}, opener)
+        self.assertEqual(result['status'], 'matched')
+        self.assertEqual(result['provider'], 'google_places')
+        self.assertEqual(result['candidates'][0]['name'], '테스트 카페')
+        self.assertEqual(result['providers_tried'], ['naver_local_search', 'google_places'])
+        self.assertEqual(len(called), 2)
+
+    def test_malformed_naver_results_fall_back_to_valid_google_result(self):
+        def opener(request, timeout):
+            if 'openapi.naver.com' in request.full_url:
+                return io.BytesIO(b'{"items": {"unexpected": "shape"}}')
+            return io.BytesIO(json.dumps({'places': [{
+                'displayName': {'text': '테스트 카페'},
+                'formattedAddress': '서울 마포구 양화로 2',
+                'location': {'latitude': 37.55, 'longitude': 126.91}}]}).encode())
+        result = lookup_place_address('테스트 카페', {'NAVER_CLIENT_ID': 'id',
+            'NAVER_CLIENT_SECRET': 'secret', 'GOOGLE_MAPS_API_KEY': 'key'}, opener)
+        self.assertEqual(result['status'], 'matched')
+        self.assertEqual(result['provider'], 'google_places')
+        self.assertEqual(result['providers_tried'], ['naver_local_search', 'google_places'])
+
+    def test_malformed_google_candidate_fields_do_not_crash_lookup(self):
+        def opener(request, timeout):
+            if 'places.googleapis.com' in request.full_url:
+                return io.BytesIO(json.dumps({'places': [
+                    {'displayName': {'text': '테스트 카페'}, 'formattedAddress': {'bad': 'value'}}
+                ]}).encode())
+            return io.BytesIO(json.dumps({'features': [None, {
+                'properties': {'countrycode': 'KR', 'name': '테스트 카페', 'state': '서울'},
+                'geometry': {'coordinates': [126.91, 37.55]}}]}).encode())
+        result = lookup_place_address('테스트 카페', {'GOOGLE_MAPS_API_KEY': 'key'}, opener)
+        self.assertEqual(result['provider'], 'photon_openstreetmap')
+        self.assertEqual(result['status'], 'matched')
+
+    def test_google_empty_search_can_use_exact_korean_photon_candidate(self):
+        def opener(request, timeout):
+            if 'places.googleapis.com' in request.full_url:
+                return io.BytesIO(json.dumps({'places': []}).encode())
+            self.assertIn('photon.komoot.io', request.full_url)
+            return io.BytesIO(json.dumps({'features': [
+                {'properties': {'countrycode': 'KR', 'name': '테스트 카페', 'state': '서울'},
+                 'geometry': {'coordinates': [126.91, 37.55]}},
+                {'properties': {'countrycode': 'KR', 'name': '다른 카페', 'state': '서울'},
+                 'geometry': {'coordinates': [126.92, 37.56]}}
+            ]}).encode())
+        result = lookup_place_address('테스트 카페', {'GOOGLE_MAPS_API_KEY': 'key'}, opener)
+        self.assertEqual(result['provider'], 'photon_openstreetmap')
+        self.assertEqual(result['status'], 'matched')
+        self.assertEqual(len(result['candidates']), 1)
 
     def test_google_search_combines_name_area_and_venue_keyword(self):
         def opener(request, timeout):

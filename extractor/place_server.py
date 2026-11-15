@@ -7,6 +7,7 @@ import html
 import hmac
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -20,6 +21,10 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
+
+from event_extraction import (ai_extract_events, dedupe_events, event_signals,
+                              extract_text_events)
+from ocr_tesseract import read_tesseract_images
 
 HERE = Path(__file__).resolve().parent
 ENTRY = 'your_instagram_activity/saved/saved_posts.json'
@@ -185,8 +190,9 @@ def valid_korean_point(point):
 
 
 def valid_world_point(point):
-    return (isinstance(point, dict) and isinstance(point.get('lat'), (int, float))
-            and isinstance(point.get('lng'), (int, float))
+    return (isinstance(point, dict)
+            and all(isinstance(point.get(axis), (int, float)) and not isinstance(point.get(axis), bool)
+                    and math.isfinite(point[axis]) for axis in ('lat', 'lng'))
             and -90 <= point['lat'] <= 90 and -180 <= point['lng'] <= 180)
 
 
@@ -196,17 +202,26 @@ def photon_features(query, opener=None):
     request = urllib.request.Request(url, headers={'User-Agent': 'PinmapPlaceTest/0.1'})
     try:
         with opener(request, timeout=20) as response:
-            return json.load(response).get('features', [])
-    except (urllib.error.URLError, ValueError, OSError):
+            body = json.load(response)
+        if not isinstance(body, dict) or not isinstance(body.get('features'), list):
+            return None
+        return body['features']
+    except (urllib.error.URLError, ValueError, OSError, TypeError):
         return None
 
 
 def photon_candidates(name, features):
     candidates = []
     for feature in features:
+        if not isinstance(feature, dict):
+            continue
         props = feature.get('properties') or {}
-        xy = (feature.get('geometry') or {}).get('coordinates')
+        geometry = feature.get('geometry') or {}
+        if not isinstance(props, dict) or not isinstance(geometry, dict):
+            continue
+        xy = geometry.get('coordinates')
         if (str(props.get('countrycode', '')).upper() != 'KR' or
+                not isinstance(props.get('name'), str) or
                 normalized_place_name(props.get('name')) != normalized_place_name(name) or
                 not isinstance(xy, list) or len(xy) < 2):
             continue
@@ -276,6 +291,20 @@ def lookup_place_address(name, settings=None, opener=None, area_hint=None, searc
     naver_secret = settings.get('NAVER_CLIENT_SECRET', '').strip()
     google_key = settings.get('GOOGLE_MAPS_API_KEY', '').strip()
     scoped_query = ' '.join(x for x in (query, (area_hint or '').strip(), (search_keyword or '').strip()) if x)
+    def next_provider(current):
+        # A failed or empty provider can yield to the next source, but no
+        # unrelated name is ever accepted merely because a provider found it.
+        if current == 'naver_local_search':
+            later = {**settings, 'NAVER_CLIENT_ID': '', 'NAVER_CLIENT_SECRET': ''}
+        elif current == 'google_places':
+            later = {**settings, 'NAVER_CLIENT_ID': '', 'NAVER_CLIENT_SECRET': '',
+                     'GOOGLE_MAPS_API_KEY': ''}
+        else:
+            return None
+        result = lookup_place_address(query, later, opener, area_hint=area_hint,
+                                      search_keyword=search_keyword)
+        result['providers_tried'] = [current] + result.get('providers_tried', [result.get('provider')])
+        return result
     if naver_id and naver_secret:
         provider = 'naver_local_search'
         url = 'https://openapi.naver.com/v1/search/local.json?' + urlencode({'query': scoped_query, 'display': 5, 'start': 1})
@@ -291,7 +320,7 @@ def lookup_place_address(name, settings=None, opener=None, area_hint=None, searc
                                                                  'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location,nextPageToken'})
     else:
         provider = 'photon_openstreetmap'
-        features = photon_features(query, opener)
+        features = photon_features(scoped_query, opener)
         if features is None:
             return {'status': 'lookup_failed', 'provider': provider, 'candidates': []}
         candidates = photon_candidates(query, features)
@@ -301,12 +330,26 @@ def lookup_place_address(name, settings=None, opener=None, area_hint=None, searc
     try:
         with opener(request, timeout=20) as response:
             body = json.load(response)
+        if not isinstance(body, dict):
+            raise ValueError('invalid map response')
+        collection = body.get('items' if provider == 'naver_local_search' else 'places')
+        if collection is not None and not isinstance(collection, list):
+            raise ValueError('invalid map response')
     except (urllib.error.URLError, ValueError, OSError):
+        fallback = next_provider(provider)
+        if fallback:
+            return fallback
         return {'status': 'lookup_failed', 'provider': provider, 'candidates': []}
     if provider == 'naver_local_search':
         raw = []
-        for item in body.get('items', []):
-            candidate = {'name': item.get('title', ''), 'address': item.get('roadAddress') or item.get('address') or ''}
+        for item in body.get('items') or []:
+            if not isinstance(item, dict):
+                continue
+            name = item.get('title')
+            address = item.get('roadAddress') or item.get('address')
+            if not isinstance(name, str) or not isinstance(address, str):
+                continue
+            candidate = {'name': name, 'address': address}
             try:
                 point = {'lat': int(item['mapy']) / 10000000, 'lng': int(item['mapx']) / 10000000}
                 if valid_korean_point(point):
@@ -314,12 +357,19 @@ def lookup_place_address(name, settings=None, opener=None, area_hint=None, searc
             except (KeyError, TypeError, ValueError):
                 pass
             raw.append(candidate)
-        more = int(body.get('total', 0)) > len(raw)
+        try:
+            more = int(body.get('total', 0)) > len(raw)
+        except (TypeError, ValueError):
+            more = False
     else:
-        raw = [{'name': item.get('displayName', {}).get('text', ''),
-                'address': item.get('formattedAddress', ''),
-                'coordinates': {'lat': item.get('location', {}).get('latitude'),
-                                'lng': item.get('location', {}).get('longitude')}} for item in body.get('places', [])]
+        raw = [{'name': (item.get('displayName') or {}).get('text') or '',
+                'address': item.get('formattedAddress') or '',
+                'coordinates': {'lat': (item.get('location') or {}).get('latitude'),
+                                'lng': (item.get('location') or {}).get('longitude')}} for item in (body.get('places') or [])
+               if isinstance(item, dict) and isinstance(item.get('displayName') or {}, dict)
+               and isinstance(item.get('location') or {}, dict)
+               and isinstance((item.get('displayName') or {}).get('text'), str)
+               and isinstance(item.get('formattedAddress'), str)]
         more = bool(body.get('nextPageToken'))
     target = normalized_place_name(query)
     exact = [item for item in raw if item['address'].strip() and
@@ -337,6 +387,10 @@ def lookup_place_address(name, settings=None, opener=None, area_hint=None, searc
         if area_hint and not search_keyword:
             fallback['name_only_fallback'] = True
         return fallback
+    if not candidates:
+        fallback = next_provider(provider)
+        if fallback:
+            return fallback
     if len(candidates) == 1 and not more:
         return {'status': 'matched', 'provider': provider, 'address': candidates[0]['address'],
                 'candidates': candidates}
@@ -544,12 +598,17 @@ def prepare_images(files, work):
 
 
 def ocr_images(images):
-    if not images or not shutil.which('swift'):
-        return [], ['macOS Swift Vision OCR을 사용할 수 없습니다.'] if images else []
-    result = subprocess.run(['swift', str(HERE / 'ocr.swift')] + [x['path'] for x in images],
-                            capture_output=True, text=True, timeout=240)
+    if not images:
+        return [], []
+    if not shutil.which('swift') or not (HERE / 'ocr.swift').is_file():
+        return read_tesseract_images(images)
+    try:
+        result = subprocess.run(['swift', str(HERE / 'ocr.swift')] + [x['path'] for x in images],
+                                capture_output=True, text=True, timeout=240)
+    except (OSError, subprocess.TimeoutExpired):
+        return read_tesseract_images(images)
     if result.returncode:
-        return [], ['OCR 실패: ' + result.stderr[-300:]]
+        return read_tesseract_images(images)
     lookup = {x['path']: x for x in images}
     rows = []
     for line in result.stdout.splitlines():
@@ -562,7 +621,7 @@ def ocr_images(images):
                              'lines': [x['text'] for x in detections], 'detections': detections})
         except ValueError:
             continue
-    return rows, []
+    return (rows, []) if rows else read_tesseract_images(images)
 
 
 
@@ -807,8 +866,8 @@ def ai_extract(caption, rows, images, transcripts, screen_text=None):
         return [], 'AI API 분석 실패: ' + str(exc)[:180]
 
 
-def ai_post_summary(caption, observed_text, places):
-    """Return a source-grounded title and a short description for a place post."""
+def ai_post_summary(caption, observed_text, places, events=None):
+    """Return a source-grounded title and short description for the content."""
     settings = ai_settings()
     provider = settings.get('MULTIUSER_AI_PROVIDER', 'openai')
     key = settings.get('GEMINI_API_KEY', '').strip() if provider == 'gemini' else settings.get('OPENAI_API_KEY', '').strip()
@@ -817,8 +876,12 @@ def ai_post_summary(caption, observed_text, places):
     model = settings.get('MULTIUSER_MODEL', 'gemini-2.5-flash') if provider == 'gemini' else settings.get('PINMAP_PLACE_AI_MODEL', 'gpt-4.1-mini')
     evidence = {'caption': caption[:6000], 'screen_text': observed_text[:20],
                 'places': [{'name': p.get('name'), 'evidence': (p.get('evidence') or {}).get('quote', '')[:180]}
-                           for p in places[:35]]}
-    prompt = ('장소 게시물의 제목과 2줄 분량의 구체적인 한국어 요약을 작성하세요. '
+                           for p in places[:35]],
+                'events': [{'title': e.get('title'), 'date_text': e.get('date_text'),
+                            'evidence': (e.get('evidence') or {}).get('quote', '')[:180]}
+                           for e in (events or [])[:20]]}
+    subject = '장소와 행사' if places and events else ('전시·팝업 등 행사' if events else '장소')
+    prompt = (subject + ' 게시물의 제목과 2줄 분량의 구체적인 한국어 요약을 작성하세요. '
               '제목은 32자 이내로 게시물의 주제를 설명하고, 추출된 장소 수와 혼동되지 않도록 장소 개수는 넣지 마세요. '
               '요약은 장소 이름만 나열하지 말고 '
               '자료에 실제로 나온 분위기, 활동, 지역 또는 추천 이유를 2문장, 70자 이내로 설명하세요. '
@@ -873,17 +936,21 @@ def ai_post_summary(caption, observed_text, places):
         return None, None, 'AI 요약 실패: ' + str(exc)[:160]
 
 
-def extract_one(post, media_root=None, ignore_caption=False):
+def extract_one(post, media_root=None, ignore_caption=False, content_types=('place',)):
     post_id = post['post_id']
     caption = '' if ignore_caption else post['caption']
-    places = caption_places(caption)
+    want_places = 'place' in content_types
+    want_events = 'event' in content_types
+    places = caption_places(caption) if want_places else []
+    events = []
     files = media_files(media_root, post_id)
     notes = []
     observed_text = []
     screen_text = []
     audio_transcripts = []
+    rows = []
     route = 'caption'
-    if not places or any(p['needs_review'] for p in places):
+    if (want_places and (not places or any(p['needs_review'] for p in places))) or want_events:
         route = 'media_and_ai'
         with tempfile.TemporaryDirectory(prefix='pinmap-place-') as temp:
             images, media_notes = prepare_images(files, Path(temp))
@@ -896,42 +963,57 @@ def extract_one(post, media_root=None, ignore_caption=False):
             transcripts, audio_notes = transcribe_videos(files, Path(temp))
             notes.extend(audio_notes)
             audio_transcripts = transcripts
-            found = dedupe(ocr_places(rows) + ocr_named_places(rows))
-            for transcript in transcripts:
-                for item in caption_places(transcript['text']):
-                    item['source'] = 'audio_transcript'
-                    item['evidence'] = {'kind': 'audio', 'file': transcript['source_file'],
-                                        'time_seconds': transcript['time_seconds'], 'quote': transcript['text']}
-                    item['needs_review'] = True
-                    found.append(item)
-            places = dedupe(places + found)
-            if not places or any(p['needs_review'] for p in places):
-                ai_places, error = ai_extract(caption, rows, images, transcripts, screen_text)
-                if error:
-                    notes.append(error)
-                places = dedupe(places + ai_places)
+            if want_places:
+                found = dedupe(ocr_places(rows) + ocr_named_places(rows))
+                for transcript in transcripts:
+                    for item in caption_places(transcript['text']):
+                        item['source'] = 'audio_transcript'
+                        item['evidence'] = {'kind': 'audio', 'file': transcript['source_file'],
+                                            'time_seconds': transcript['time_seconds'], 'quote': transcript['text']}
+                        item['needs_review'] = True
+                        found.append(item)
+                places = dedupe(places + found)
+                if not places or any(p['needs_review'] for p in places):
+                    ai_places, error = ai_extract(caption, rows, images, transcripts, screen_text)
+                    if error:
+                        notes.append(error)
+                    places = dedupe(places + ai_places)
+            if want_events:
+                events = extract_text_events(caption, rows, transcripts)
+                if event_signals(caption, rows, transcripts) and (
+                        not events or any(not e['start_date'] or not e['venue_name'] for e in events)):
+                    ai_events, error = ai_extract_events(caption, rows, transcripts, images,
+                                                         ai_settings(), request_json_with_retry)
+                    if error:
+                        notes.append(error)
+                    events = dedupe_events(events + ai_events)
         if not files:
             notes.append('사진·영상 원본이 없어 미디어 분석을 완료하지 못했습니다.')
-    theme = place_search_keyword(caption + ' ' + ' '.join(line for row in rows[:2] for line in row['lines'])) if route == 'media_and_ai' else place_search_keyword(caption)
-    for place in places:
-        quote = (place.get('evidence') or {}).get('quote', '')
-        if not place.get('search_keyword'):
-            place['search_keyword'] = place_search_keyword(quote) or theme
-        if not place.get('area_hint') and place.get('name') and place['name'] in quote:
-            area = re.search(r'\(([^()]{2,18})\)', quote)
-            if area:
-                place['area_hint'] = area.group(1).strip()
-    notes.extend(resolve_missing_addresses(places, caption))
-    ai_title, ai_summary, summary_error = ai_post_summary(caption, observed_text, places)
+    if want_places:
+        theme = place_search_keyword(caption + ' ' + ' '.join(line for row in rows[:2] for line in row['lines'])) if route == 'media_and_ai' else place_search_keyword(caption)
+        for place in places:
+            quote = (place.get('evidence') or {}).get('quote', '')
+            if not place.get('search_keyword'):
+                place['search_keyword'] = place_search_keyword(quote) or theme
+            if not place.get('area_hint') and place.get('name') and place['name'] in quote:
+                area = re.search(r'\(([^()]{2,18})\)', quote)
+                if area:
+                    place['area_hint'] = area.group(1).strip()
+        notes.extend(resolve_missing_addresses(places, caption))
+    ai_title, ai_summary, summary_error = ai_post_summary(caption, observed_text, places, events)
     if summary_error:
         notes.append(summary_error)
     map_locations = map_locations_from_places(places)
-    status = 'extracted' if places and all(not p['needs_review'] for p in places) else ('needs_review' if places else 'needs_media_or_ai')
+    status = ('extracted' if places and not events and all(not p['needs_review'] for p in places)
+              else 'needs_review' if places or events else 'needs_media_or_ai')
+    content_kind = ('mixed' if places and events else 'place' if places else
+                    'event' if events else 'unknown')
     return {'post_id': post_id, 'source_url': post['source_url'], 'status': status,
             'ai_title': ai_title, 'ai_summary': ai_summary,
             'author_username': post.get('author_username'),
             'author_profile_data_url': post.get('author_profile_data_url'),
-            'route': route, 'media_files': [p.name for p in files], 'places': places,
+            'route': route, 'content_kind': content_kind, 'events': events,
+            'media_files': [p.name for p in files], 'places': places,
             'map_locations': map_locations,
             'observed_text': observed_text, 'screen_text': screen_text,
             'audio_transcripts': audio_transcripts, 'notes': notes}
@@ -946,12 +1028,15 @@ def extract(data, selected, media_root=None, ignore_caption=False):
         post_id = raw_id if raw_id.startswith('ig_') else 'ig_' + raw_id
         post = posts.get(post_id)
         results.append(extract_one(post, media_root, ignore_caption) if post else
-                       {'post_id': post_id, 'status': 'not_in_zip', 'places': [], 'map_locations': []})
+                       {'post_id': post_id, 'status': 'not_in_zip', 'content_kind': 'unknown',
+                        'events': [], 'places': [], 'map_locations': []})
     return {'schema_version': 1, 'place_only_test': True, 'category_classification': False,
             'input': 'instagram_zip', 'zip_post_count': len(posts), 'results': results}
 
 
 def canonical_link(url):
+    if not isinstance(url, str) or len(url) > 2048:
+        raise ValueError('Instagram 게시물 또는 릴스의 HTTPS 링크를 입력하세요.')
     parsed = urlparse(url)
     if parsed.scheme != 'https' or parsed.hostname not in ('instagram.com', 'www.instagram.com') or parsed.username or parsed.password:
         raise ValueError('Instagram 게시물 또는 릴스의 HTTPS 링크를 입력하세요.')
@@ -961,11 +1046,17 @@ def canonical_link(url):
     return 'https://www.instagram.com/%s/%s/' % (match.group(1), match.group(2))
 
 
-def collect_link(url, mode):
+def collect_link(url, mode, media_root=None, browser_profile=None):
     url = canonical_link(url)
     command = ['node', str(HERE / 'collect_link.mjs'), url, mode]
+    environment = dict(os.environ)
+    if media_root is not None:
+        environment['PINMAP_MEDIA_ROOT'] = str(media_root)
+    if browser_profile is not None:
+        environment['PINMAP_BROWSER_PROFILE_DIR'] = str(browser_profile)
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=240)
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=240,
+                                   env=environment)
         if completed.returncode:
             raise ValueError('링크 수집 도구가 실행되지 않았습니다: ' + completed.stderr[-220:])
         return json.loads(completed.stdout)
@@ -1108,46 +1199,60 @@ def attach_location_images(result, media_dir):
                 total_encoded += len(image)
 
 
-def extract_link(url, ignore_caption=False):
+def normalize_content_types(value):
+    if value is None:
+        return ('place',)
+    if (not isinstance(value, list) or not value or len(value) > 2 or
+            any(item not in ('place', 'event') for item in value) or len(set(value)) != len(value)):
+        raise ValueError('content_types는 place, event 중 하나 이상이어야 합니다.')
+    return tuple(value)
+
+
+def extract_link(url, ignore_caption=False, content_types=None):
     url = canonical_link(url)
-    print('1/3 게시물 링크와 캡션 확인 중...', file=sys.stderr, flush=True)
-    observed = collect_link(url, 'caption')
-    if observed.get('status') != 'collected':
-        return {'schema_version': 1, 'place_only_test': True, 'category_classification': False,
-                'input': 'instagram_link', 'results': [{'post_id': observed.get('post_id'),
-                'source_url': url, 'status': 'collection_failed', 'places': [], 'map_locations': [],
-                'notes': observed.get('notes', [])}]}
-    caption = '' if ignore_caption else observed.get('caption', '')
-    candidates = caption_places(caption)
-    notes = observed.get('notes', [])
-    if not candidates or any(p['needs_review'] for p in candidates):
-        print('2/3 사진·영상 원본 수집 중...', file=sys.stderr, flush=True)
-        collected = collect_link(url, 'media')
-        if collected.get('caption') and not caption:
-            caption = collected['caption']
-        for field in ('author_username', 'author_profile_data_url'):
-            if not observed.get(field) and collected.get(field):
-                observed[field] = collected[field]
-        notes += collected.get('notes', [])
-    post = {'post_id': observed['post_id'], 'source_url': observed['source_url'], 'caption': caption,
-            'author_username': observed.get('author_username'),
-            'author_profile_data_url': observed.get('author_profile_data_url')}
-    print('3/3 장소 목록 추출 중... 미디어가 많으면 몇 분 걸릴 수 있습니다.', file=sys.stderr, flush=True)
-    result = extract_one(post, None, ignore_caption)
-    attach_location_images(result, HERE / 'data' / 'media' / observed['post_id'])
-    cover = next((p for p in (HERE / 'data' / 'media' / observed['post_id']).glob('link-cover.*')
-                  if p.suffix.lower() in IMAGE_EXT), None)
-    if cover and ffmpeg_bin():
-        with tempfile.TemporaryDirectory(prefix='pinmap-cover-') as temp:
-            thumbnail = Path(temp) / 'cover.jpg'
-            converted = subprocess.run([ffmpeg_bin(), '-hide_banner', '-loglevel', 'error', '-y',
-                                        '-i', str(cover), '-vf', 'scale=480:-2', '-q:v', '6', str(thumbnail)],
-                                       capture_output=True, timeout=20)
-            if converted.returncode == 0 and thumbnail.is_file() and thumbnail.stat().st_size <= 300 * 1024:
-                result['cover_data_url'] = 'data:image/jpeg;base64,' + base64.b64encode(thumbnail.read_bytes()).decode('ascii')
-    result['notes'] = list(dict.fromkeys(notes + result['notes']))
-    return {'schema_version': 1, 'place_only_test': True, 'category_classification': False,
-            'input': 'instagram_link', 'results': [result]}
+    types = normalize_content_types(content_types)
+    place_only = types == ('place',)
+    with tempfile.TemporaryDirectory(prefix='pinmap-request-') as temp:
+        media_root = Path(temp) / 'media'
+        browser_profile = Path(temp) / 'browser'
+        print('1/3 게시물 링크와 캡션 확인 중...', file=sys.stderr, flush=True)
+        observed = collect_link(url, 'caption', media_root, browser_profile)
+        if observed.get('status') != 'collected':
+            return {'schema_version': 1, 'place_only_test': place_only, 'category_classification': False,
+                    'input': 'instagram_link', 'results': [{'post_id': observed.get('post_id'),
+                    'source_url': url, 'status': 'collection_failed', 'content_kind': 'unknown',
+                    'places': [], 'events': [], 'map_locations': [], 'notes': observed.get('notes', [])}]}
+        caption = '' if ignore_caption else observed.get('caption', '')
+        candidates = caption_places(caption) if 'place' in types else []
+        notes = observed.get('notes', [])
+        if 'event' in types or ('place' in types and (not candidates or any(p['needs_review'] for p in candidates))):
+            print('2/3 사진·영상 원본 수집 중...', file=sys.stderr, flush=True)
+            collected = collect_link(url, 'media', media_root, browser_profile)
+            if collected.get('caption') and not caption:
+                caption = collected['caption']
+            for field in ('author_username', 'author_profile_data_url'):
+                if not observed.get(field) and collected.get(field):
+                    observed[field] = collected[field]
+            notes += collected.get('notes', [])
+        post = {'post_id': observed['post_id'], 'source_url': observed['source_url'], 'caption': caption,
+                'author_username': observed.get('author_username'),
+                'author_profile_data_url': observed.get('author_profile_data_url')}
+        print('3/3 콘텐츠 분석 중... 미디어가 많으면 몇 분 걸릴 수 있습니다.', file=sys.stderr, flush=True)
+        result = extract_one(post, media_root, ignore_caption, types)
+        media_dir = media_root / observed['post_id']
+        attach_location_images(result, media_dir)
+        cover = next((p for p in media_dir.glob('link-cover.*') if p.suffix.lower() in IMAGE_EXT), None)
+        if cover and ffmpeg_bin():
+            with tempfile.TemporaryDirectory(prefix='pinmap-cover-') as cover_temp:
+                thumbnail = Path(cover_temp) / 'cover.jpg'
+                converted = subprocess.run([ffmpeg_bin(), '-hide_banner', '-loglevel', 'error', '-y',
+                                            '-i', str(cover), '-vf', 'scale=480:-2', '-q:v', '6', str(thumbnail)],
+                                           capture_output=True, timeout=20)
+                if converted.returncode == 0 and thumbnail.is_file() and thumbnail.stat().st_size <= 300 * 1024:
+                    result['cover_data_url'] = 'data:image/jpeg;base64,' + base64.b64encode(thumbnail.read_bytes()).decode('ascii')
+        result['notes'] = list(dict.fromkeys(notes + result['notes']))
+        return {'schema_version': 1, 'place_only_test': place_only, 'category_classification': False,
+                'input': 'instagram_link', 'results': [result]}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1158,8 +1263,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         token = os.getenv('PINMAP_TEST_TOKEN', '')
+        if not token:
+            return self.respond(503, {'error': 'server_not_configured'})
         supplied = self.headers.get('Authorization', '')
-        if token and not hmac.compare_digest(supplied, 'Bearer ' + token):
+        if not hmac.compare_digest(supplied, 'Bearer ' + token):
             return self.respond(401, {'error': 'unauthorized'})
         parsed = urlparse(self.path)
         if parsed.path not in ('/extract', '/media', '/extract-link', '/resolve-places'):
@@ -1179,7 +1286,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == '/extract-link':
                 request = json.loads(self.rfile.read(size))
-                result = extract_link(request.get('url', ''), request.get('ignore_caption') is True)
+                if not isinstance(request, dict):
+                    raise ValueError('게시물 링크 요청 형식이 올바르지 않습니다.')
+                result = extract_link(request.get('url', ''), request.get('ignore_caption') is True,
+                                      request.get('content_types'))
                 self.respond(200, result)
                 return
             if parsed.path == '/media':

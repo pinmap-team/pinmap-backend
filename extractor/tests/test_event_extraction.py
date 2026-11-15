@@ -38,6 +38,19 @@ class EventExtractionTests(unittest.TestCase):
         one_day = extract_text_events('하루 팝업\n2026.11.15 ~ 2026.11.15')[0]
         self.assertEqual((one_day['start_date'], one_day['end_date']), ('2026-11-15', '2026-11-15'))
 
+    def test_numbered_exhibition_roundup_uses_each_blocks_title_venue_and_two_digit_year(self):
+        caption = ('11월 전시회 추천 BEST 2\n'
+                   '1️⃣ 첫 번째 작품\n📍 서울 미술관\n🗓️ 26.11.24 ~ 27.03.28\n'
+                   '2️⃣ 두 번째 작품\n📍 부산 전시관\n🗓️ 26.12.11 ~ 27.04.11\n'
+                   '#11월전시회 #전시회추천')
+        events = extract_text_events(caption)
+        self.assertEqual(len(events), 2)
+        self.assertEqual([item['title'] for item in events], ['첫 번째 작품', '두 번째 작품'])
+        self.assertEqual([item['event_type'] for item in events], ['exhibition', 'exhibition'])
+        self.assertEqual((events[0]['start_date'], events[0]['end_date']), ('2026-11-24', '2027-03-28'))
+        self.assertEqual((events[1]['start_date'], events[1]['end_date']), ('2026-12-11', '2027-04-11'))
+        self.assertEqual([item['venue_name'] for item in events], ['서울 미술관', '부산 전시관'])
+
     def test_reel_ocr_preserves_frame_time_and_no_ai_without_event_signal(self):
         rows = [{'source_file': 'video-frame-001500ms.jpg', 'time_seconds': 1.5,
                  'lines': ['겨울 팝업', '2026년 11월 20일 ~ 2026년 12월 1일', '장소: 중앙 광장']}]

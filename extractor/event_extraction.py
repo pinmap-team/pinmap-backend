@@ -11,8 +11,9 @@ import urllib.request
 EVENT_CUE = re.compile(r'전시(?:회)?|팝[ -]?업|페스티벌|축제|공연|박람회|플리마켓|(?:^|\W)(?:exhibition|pop[ -]?up|festival|concert|art show)(?:\W|$)', re.I)
 EXHIBITION = re.compile(r'전시(?:회)?|exhibition|art show', re.I)
 POP_UP = re.compile(r'팝[ -]?업|pop[ -]?up', re.I)
-FULL_DATE = re.compile(r'(?<!\d)(20\d{2})\s*(?:[.\-/]|년)\s*(0?[1-9]|1[0-2])\s*(?:[.\-/]|월)\s*(0?[1-9]|[12]\d|3[01])\s*일?(?!\d)')
+FULL_DATE = re.compile(r'(?<!\d)(20\d{2}|\d{2})\s*(?:[.\-/]|년)\s*(0?[1-9]|1[0-2])\s*(?:[.\-/]|월)\s*(0?[1-9]|[12]\d|3[01])\s*일?(?!\d)')
 SHORT_DATE = re.compile(r'(?<!\d)(0?[1-9]|1[0-2])\s*(?:[.\-/]|월)\s*(0?[1-9]|[12]\d|3[01])\s*일?(?!\d)')
+NUMBERED_ITEM = re.compile(r'^\s*(?:[0-9]{1,2}[.)]|[0-9]\ufe0f?\u20e3|🔟|[①-⑳])\s*')
 TIME = re.compile(r'(?<!\d)(?:[01]?\d|2[0-3]):[0-5]\d|(?:오전|오후)\s*\d{1,2}시(?:\s*\d{1,2}분)?', re.I)
 VENUE = re.compile(r'^\s*(?:📍\s*|장소\s*[:：]|위치\s*[:：]|venue\s*[:：]|location\s*[:：])\s*(.+)$', re.I)
 ADDRESS = re.compile(r'(?:서울(?:특별시)?|부산(?:광역시)?|대구(?:광역시)?|인천(?:광역시)?|광주(?:광역시)?|대전(?:광역시)?|울산(?:광역시)?|세종(?:특별자치시)?|경기(?:도)?|강원(?:도|특별자치도)?|충청[남북]도|전라[남북]도|경상[남북]도|제주(?:도|특별자치도)?)\s+[^\n]{1,80}?(?:로|길)\s*\d+(?:-\d+)?')
@@ -35,11 +36,13 @@ def event_signals(caption, rows=(), transcripts=()):
 
 
 def explicit_dates(text):
-    """Only full, explicitly written calendar dates become ISO values."""
+    """Only explicit year-month-day values, including YY.MM.DD, become ISO."""
     values = []
     for match in FULL_DATE.finditer(text or ''):
         try:
-            value = date(int(match[1]), int(match[2]), int(match[3])).isoformat()
+            year = int(match[1])
+            value = date(year if len(match[1]) == 4 else 2000 + year,
+                         int(match[2]), int(match[3])).isoformat()
         except ValueError:
             continue
         values.append(value)
@@ -52,18 +55,20 @@ def _date_line(lines):
 
 
 def _title(line):
-    title = re.sub(r'^\s*(?:[①-⑳\d]+[.)]\s*|[#•·✦]\s*)', '', line).strip()
+    title = NUMBERED_ITEM.sub('', line, count=1)
+    title = re.sub(r'^\s*[#•·✦]\s*', '', title).strip()
     title = title.strip('"“”\'‘’ -–|:')[:120]
     return title if len(title) >= 3 and not ROUNDUP.search(title) else None
 
 
-def _event_from_lines(lines, cue_index, evidence):
+def _event_from_lines(lines, cue_index, evidence, stop_at_next_cue=True):
     cue = lines[cue_index].strip()
     title = _title(cue)
     if not title:
         return None
     previous_cue = max((i for i in range(cue_index) if EVENT_CUE.search(lines[i])), default=-1)
-    next_cue = next((i for i in range(cue_index + 1, len(lines)) if EVENT_CUE.search(lines[i])), len(lines))
+    next_cue = (next((i for i in range(cue_index + 1, len(lines)) if EVENT_CUE.search(lines[i])), len(lines))
+                if stop_at_next_cue else len(lines))
     # A preceding event's date must not be borrowed by the next event.
     start = cue_index if previous_cue >= 0 else max(0, cue_index - 2)
     local = lines[start:min(next_cue, cue_index + 5)]
@@ -81,6 +86,9 @@ def _event_from_lines(lines, cue_index, evidence):
         notes.append('날짜의 연도 또는 정확한 일자를 확인해 주세요.')
     if len(dates) == 1:
         notes.append('종료일이 명시되지 않았습니다.')
+    if len(dates) > 1 and dates[1] < dates[0]:
+        dates = dates[:1]
+        notes.append('종료일이 시작일보다 빨라 날짜 범위를 확인해 주세요.')
     return {'title': title, 'event_type': event_type(cue),
             'start_date': dates[0] if dates else None,
             'end_date': dates[1] if len(dates) > 1 else None,
@@ -104,8 +112,20 @@ def extract_text_events(caption, rows=(), transcripts=()):
     events = []
     for lines, evidence in sources:
         lines = [line.strip() for line in lines if isinstance(line, str) and line.strip()]
+        numbered = [index for index, line in enumerate(lines) if NUMBERED_ITEM.match(line)]
+        # A roundup headline supplies the type; each numbered block supplies its
+        # own title, date and venue. The headline and hashtags are not events.
+        if numbered and EVENT_CUE.search(' '.join(lines[:numbered[0]])):
+            kind = event_type(' '.join(lines[:numbered[0]]))
+            for offset, start in enumerate(numbered):
+                stop = numbered[offset + 1] if offset + 1 < len(numbered) else len(lines)
+                event = _event_from_lines(lines[start:stop], 0, evidence, stop_at_next_cue=False)
+                if event:
+                    event['event_type'] = kind
+                    events.append(event)
+            continue
         for index, line in enumerate(lines):
-            if EVENT_CUE.search(line):
+            if not line.startswith('#') and EVENT_CUE.search(line):
                 event = _event_from_lines(lines, index, evidence)
                 if event:
                     events.append(event)

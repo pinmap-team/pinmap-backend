@@ -39,6 +39,16 @@ starts an API and worker together on `127.0.0.1` without account sign-in for
 local development; it must remain bound to the loopback interface. It serves
 a web app only if `PINMAP_FRONTEND_DIR` points to an explicit local build.
 
+If a media analysis provider rejects a request with 401, 403, or 429, the
+worker records a persistent pause for that provider and leaves its remaining
+jobs queued. A missing provider configuration pauses the same way. An ASR
+authorization or quota error pauses all uploaded-media analysis. Public-link
+jobs continue through the shared extractor. Check the pause with
+`npm run queue -- status`; after correcting the provider's key or limit,
+explicitly resume it with `npm run queue -- resume <provider>` (or
+`all_media` for an ASR pause). Failed and interrupted jobs are never retried
+automatically. Already-running requests cannot be recalled by this pause.
+
 The shared extractor requires `PINMAP_EXTRACTOR_ORIGIN` on the API and worker,
 plus `PINMAP_EXTRACTOR_TOKEN` on the worker. Use the same server-only token as
 the root Vercel backend. Never place it in browser code. The API's invite

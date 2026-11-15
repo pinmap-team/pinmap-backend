@@ -28,12 +28,29 @@ export async function enqueueJob(db,userId,postId,settings,{force=false,requireV
 }
 export function claimJob(db,workerId,leaseMs=20*60*1000){
   return db.transaction(()=>{
-    const row=db.prepare(`SELECT j.* FROM jobs j WHERE j.status='queued' AND NOT EXISTS (SELECT 1 FROM jobs active WHERE active.user_id=j.user_id AND active.status IN ('preparing','summarizing')) ORDER BY (SELECT COUNT(*) FROM jobs done WHERE done.user_id=j.user_id AND done.status='completed' AND done.completed_at>?) ASC,j.created_at ASC LIMIT 1`).get(new Date(Date.now()-86400000).toISOString());
+    const row=db.prepare(`SELECT j.* FROM jobs j WHERE j.status='queued'
+      AND (json_extract(j.material_json,'$.collect_public') = 1 OR NOT EXISTS (
+        SELECT 1 FROM provider_pauses pause WHERE pause.provider_name='all_media'
+          OR pause.provider_name=json_extract(j.settings_json,'$.providerName')
+      ))
+      AND NOT EXISTS (SELECT 1 FROM jobs active WHERE active.user_id=j.user_id AND active.status IN ('preparing','summarizing'))
+      ORDER BY (SELECT COUNT(*) FROM jobs done WHERE done.user_id=j.user_id AND done.status='completed' AND done.completed_at>?) ASC,j.created_at ASC LIMIT 1`).get(new Date(Date.now()-86400000).toISOString());
     if(!row)return null;
     db.prepare("UPDATE jobs SET status='preparing',worker_id=?,lease_until=?,updated_at=? WHERE id=? AND status='queued'").run(workerId,Date.now()+leaseMs,now(),row.id);
     return db.prepare('SELECT * FROM jobs WHERE id=?').get(row.id);
   }).immediate();
 }
+export function pauseProvider(db,providerName,{status,code}){
+  if(!/^[a-z][a-z0-9_-]{0,63}$/.test(providerName||'')||!([401,403,429].includes(status)||(status===503&&code==='provider_config')))throw new Error('Invalid provider pause');
+  db.prepare(`INSERT INTO provider_pauses(provider_name,status,code,paused_at) VALUES(?,?,?,?)
+    ON CONFLICT(provider_name) DO UPDATE SET status=excluded.status,code=excluded.code,paused_at=excluded.paused_at`)
+    .run(providerName,status,String(code||'provider_error').slice(0,80),now());
+}
+export function resumeProvider(db,providerName){
+  if(!/^[a-z][a-z0-9_-]{0,63}$/.test(providerName||''))throw new Error('Invalid provider name');
+  return db.prepare('DELETE FROM provider_pauses WHERE provider_name=?').run(providerName).changes;
+}
+export function pausedProviders(db){return db.prepare('SELECT provider_name,status,code,paused_at FROM provider_pauses ORDER BY provider_name').all();}
 export function markExpiredJobs(db){
   const date=now();return db.prepare("UPDATE jobs SET status='needs_review',error_json=?,worker_id=NULL,lease_until=NULL,updated_at=? WHERE status IN ('preparing','summarizing') AND lease_until<?").run(JSON.stringify({code:'worker_lost',message:'작업자가 중단됐습니다. 중복 AI 호출을 막기 위해 자동 재시도하지 않았습니다.'}),date,Date.now()).changes;
 }

@@ -51,6 +51,10 @@ export function openDatabase(file){
     );
     CREATE INDEX IF NOT EXISTS jobs_user ON jobs(user_id,created_at DESC);
     CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(status,created_at);
+    CREATE TABLE IF NOT EXISTS provider_pauses (
+      provider_name TEXT PRIMARY KEY, status INTEGER NOT NULL,
+      code TEXT NOT NULL, paused_at TEXT NOT NULL
+    );
   `);
   const postColumns=new Set(db.pragma('table_info(posts)').map(x=>x.name));
   if(!postColumns.has('metadata_json'))db.exec("ALTER TABLE posts ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");

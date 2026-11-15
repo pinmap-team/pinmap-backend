@@ -8,7 +8,7 @@ import {prepareMedia} from '../lib/media.mjs';
 import {OllamaClient} from '../lib/ollama-client.mjs';
 import {AppError,safeError} from '../lib/errors.mjs';
 import {openDatabase} from './db.mjs';
-import {claimJob,markExpiredJobs,materialFromJob,updateJob} from './jobs.mjs';
+import {claimJob,markExpiredJobs,materialFromJob,pauseProvider,updateJob} from './jobs.mjs';
 import {VllmClient} from './vllm-client.mjs';
 import {collectPublicLink,resolveMapLocations} from './extractor-client.mjs';
 import {GeminiClient} from './gemini-client.mjs';
@@ -35,9 +35,11 @@ export function desktopPlaceResult(report){
 }
 export async function processJob(db,job,{dataDir,provider,transcriber,prepare=prepareMedia,mapResolver=resolveMapLocations,desktopCollector=collectPublicLink,coverSaver=saveDesktopCover,leaseMs=20*60*1000}={}){
   const settings=JSON.parse(job.settings_json),workerId=job.worker_id;
+  let material;
   const heartbeat=setInterval(()=>updateJob(db,job.id,workerId,{lease_until:Date.now()+leaseMs}),30000);heartbeat.unref();
   try{
-    if(materialFromJob(job).collect_public){
+    material=materialFromJob(job);
+    if(material.collect_public){
       const report=await desktopCollector(job),mapped=desktopPlaceResult(report);
       try{
         const coverId=await coverSaver(db,job,report,{dataDir});
@@ -48,7 +50,7 @@ export async function processJob(db,job,{dataDir,provider,transcriber,prepare=pr
       }
       updateJob(db,job.id,workerId,{status:'completed',result_json:JSON.stringify(mapped.result),coverage_json:JSON.stringify(mapped.coverage),evidence_json:JSON.stringify(mapped.evidence),media_text_json:JSON.stringify(mapped.media_text),completed_at:new Date().toISOString(),lease_until:null,worker_id:null});return;
     }
-    const prepared=await prepare(materialFromJob(job),path.join(dataDir,'work',job.user_id,job.id),settings);
+    const prepared=await prepare(material,path.join(dataDir,'work',job.user_id,job.id),settings);
     const mediaText={version:1,visual:[],audio:[],ocr:[]};
     try{mediaText.ocr=await readImageText(prepared.images);}catch{mediaText.ocr_error="문자 인식을 완료하지 못했습니다.";}
     updateJob(db,job.id,workerId,{coverage_json:JSON.stringify(prepared.coverage),evidence_json:JSON.stringify(prepared.evidence),media_text_json:JSON.stringify(mediaText)});
@@ -95,7 +97,13 @@ export async function processJob(db,job,{dataDir,provider,transcriber,prepare=pr
     if(prepared.coverage.partial)result.result.limitations.push('제공된 원본과 추출한 프레임 범위만 분석했습니다.');
     updateJob(db,job.id,workerId,{status:'completed',result_json:JSON.stringify(result.result),coverage_json:JSON.stringify(prepared.coverage),evidence_json:JSON.stringify(result.evidence),media_text_json:JSON.stringify(mediaText),usage_json:JSON.stringify(result.usage),completed_at:new Date().toISOString(),lease_until:null,worker_id:null});
   }catch(e){
-    updateJob(db,job.id,workerId,{status:'failed',error_json:JSON.stringify({code:e.code||'processing_error',message:e instanceof AppError?safeError(e):'AI 작업 중 오류가 발생했습니다.'}),lease_until:null,worker_id:null});
+    db.transaction(()=>{
+      if(!material?.collect_public&&[401,403,429].includes(e.status)){
+        const target=e.code==='asr_error'||!/^[a-z][a-z0-9_-]{0,63}$/.test(settings.providerName||'')?'all_media':settings.providerName;
+        pauseProvider(db,target,{status:e.status,code:e.code});
+      }
+      updateJob(db,job.id,workerId,{status:'failed',error_json:JSON.stringify({code:e.code||'processing_error',message:e instanceof AppError?safeError(e):'AI 작업 중 오류가 발생했습니다.'}),lease_until:null,worker_id:null});
+    }).immediate();
   }finally{clearInterval(heartbeat);}
 }
 export async function runWorker({db,dataDir,providerFactory=providerFromEnv,concurrency=Number(process.env.WORKER_CONCURRENCY||1),pollMs=1000,signal}={}){
@@ -105,7 +113,18 @@ export async function runWorker({db,dataDir,providerFactory=providerFromEnv,conc
     markExpiredJobs(db);
     while(active.size<concurrency){
       const job=claimJob(db,workerId);if(!job)break;
-      let provider;try{if(!materialFromJob(job).collect_public)provider=providerFactory(JSON.parse(job.settings_json));}catch(e){updateJob(db,job.id,workerId,{status:'failed',error_json:JSON.stringify({code:'provider_config',message:'AI 서버 설정을 확인하세요.'}),lease_until:null,worker_id:null});continue;}
+      let provider,material,settings;
+      try{material=materialFromJob(job);settings=JSON.parse(job.settings_json);if(!material.collect_public)provider=providerFactory(settings);}
+      catch(e){
+        db.transaction(()=>{
+          if(material&&!material.collect_public&&settings){
+            const target=/^[a-z][a-z0-9_-]{0,63}$/.test(settings.providerName||'')?settings.providerName:'all_media';
+            pauseProvider(db,target,{status:503,code:'provider_config'});
+          }
+          updateJob(db,job.id,workerId,{status:'failed',error_json:JSON.stringify({code:'provider_config',message:'AI 서버 설정을 확인하세요.'}),lease_until:null,worker_id:null});
+        }).immediate();
+        continue;
+      }
       const task=processJob(db,job,{dataDir,provider}).finally(()=>active.delete(task));active.add(task);
     }
     await new Promise(resolve=>setTimeout(resolve,pollMs));

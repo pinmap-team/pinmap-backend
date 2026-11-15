@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env service/api.mjs",
     "worker": "node --env-file-if-exists=.env service/worker.mjs",
+    "queue": "node --env-file-if-exists=.env service/queue-control.mjs",
     "start:local": "node --env-file-if-exists=.env service/local.mjs",
     "migrate:legacy": "node --env-file-if-exists=.env service/migrate-legacy.mjs",
     "test": "node --test tests/*.test.mjs"

@@ -149,6 +149,47 @@ class EventExtractionTests(unittest.TestCase):
         self.assertEqual(result['places'], [])
         map_search.assert_not_called()
 
+    def test_ten_event_titles_do_not_become_places_or_map_pins(self):
+        caption = '11월 전시 추천 BEST 10\n' + ''.join(
+            f'{number}️⃣ 작품 {number}\n📍 서울 미술관 {number}\n🗓️ 26.11.24 ~ 27.03.28\n'
+            for number in range(1, 11))
+        extracted_places = [
+            {'name': f'작품 {number}', 'address': None, 'source': 'ai_api',
+             'evidence': {'kind': 'media_ocr', 'file': f'slide-{number}.jpg'},
+             'coordinates': {'lat': 37.5, 'lng': 127.0}, 'needs_review': True}
+            for number in range(1, 11)]
+        venue = {'name': '서울 미술관 1', 'address': None, 'source': 'ai_api',
+                 'evidence': {'kind': 'caption'}, 'coordinates': {'lat': 37.6, 'lng': 127.0},
+                 'needs_review': True}
+        post = {'post_id': 'ig_abcdefgh', 'source_url': 'https://www.instagram.com/p/abcdefgh/',
+                'caption': caption}
+        with patch('place_server.media_files', return_value=[]), \
+             patch('place_server.ai_extract', return_value=(extracted_places + [venue], None)), \
+             patch('place_server.ai_post_summary', return_value=('전시 추천', '전시 열 곳을 소개합니다.', None)), \
+             patch('place_server.resolve_missing_addresses', return_value=[]) as map_search:
+            result = extract_one(post, content_types=('place', 'event'))
+        self.assertEqual(len(result['events']), 10)
+        self.assertEqual(result['content_kind'], 'mixed')
+        self.assertEqual([place['name'] for place in result['places']], ['서울 미술관 1'])
+        self.assertEqual([location['name'] for location in result['map_locations']], ['서울 미술관 1'])
+        self.assertEqual([place['name'] for place in map_search.call_args.args[0]], ['서울 미술관 1'])
+
+    def test_place_only_carousel_remains_unchanged(self):
+        post = {'post_id': 'ig_abcdefgh', 'source_url': 'https://www.instagram.com/p/abcdefgh/',
+                'caption': '서울 카페 세 곳'}
+        place = {'name': '서울 카페', 'address': '서울특별시 마포구 와우산로 10',
+                 'source': 'caption', 'evidence': {'kind': 'caption'},
+                 'coordinates': {'lat': 37.55, 'lng': 126.92}, 'needs_review': False}
+        with patch('place_server.caption_places', return_value=[place]), \
+             patch('place_server.media_files', return_value=[]), \
+             patch('place_server.ai_post_summary', return_value=('카페 세 곳', '서울 카페를 소개합니다.', None)), \
+             patch('place_server.resolve_missing_addresses', return_value=[]):
+            result = extract_one(post, content_types=('place',))
+        self.assertEqual(result['content_kind'], 'place')
+        self.assertEqual(len(result['events']), 0)
+        self.assertEqual([item['name'] for item in result['places']], ['서울 카페'])
+        self.assertEqual([item['name'] for item in result['map_locations']], ['서울 카페'])
+
     def test_link_request_uses_isolated_media_directory_and_removes_it(self):
         observed = {'status': 'collected', 'post_id': 'ig_abcdefgh',
                     'source_url': 'https://www.instagram.com/p/abcdefgh/', 'caption': '전시'}

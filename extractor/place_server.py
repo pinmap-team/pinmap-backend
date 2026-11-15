@@ -152,6 +152,15 @@ def normalized_place_name(value):
     return re.sub(r'[^0-9a-z가-힣]', '', value.casefold())
 
 
+def without_event_title_places(places, events):
+    """Keep event titles out of map pins while preserving named venues."""
+    titles = {normalized_place_name(event.get('title')) for event in events}
+    venues = {normalized_place_name(event.get('venue_name')) for event in events}
+    titles.discard('')
+    return [place for place in places if normalized_place_name(place.get('name')) not in titles
+            or normalized_place_name(place.get('name')) in venues]
+
+
 def compatible_place_addresses(extracted, mapped):
     """Accept equivalent address formats without crossing districts or buildings."""
     if not extracted or not mapped:
@@ -989,6 +998,8 @@ def extract_one(post, media_root=None, ignore_caption=False, content_types=('pla
                     events = dedupe_events(events + ai_events)
         if not files:
             notes.append('사진·영상 원본이 없어 미디어 분석을 완료하지 못했습니다.')
+    if places and events:
+        places = without_event_title_places(places, events)
     if want_places:
         theme = place_search_keyword(caption + ' ' + ' '.join(line for row in rows[:2] for line in row['lines'])) if route == 'media_and_ai' else place_search_keyword(caption)
         for place in places:

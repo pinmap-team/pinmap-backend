@@ -1,4 +1,7 @@
 const crypto = require('node:crypto');
+const { projectUrl } = require('./auth/config');
+
+const MAX_EXTRACTOR_RESPONSE_BYTES = 12 * 1024 * 1024;
 
 function equalSecret(a, b) {
   const left = Buffer.from(String(a || ''));
@@ -7,12 +10,98 @@ function equalSecret(a, b) {
 }
 
 function instagramLink(value) {
+  if (typeof value !== 'string' || value.length > 2048) throw new Error('invalid_link');
   const url = new URL(value);
   if (url.protocol !== 'https:' || !['instagram.com', 'www.instagram.com'].includes(url.hostname) ||
       url.username || url.password || !/^\/(?:p|reel|tv)\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)) {
     throw new Error('Instagram 게시물 또는 릴스 링크가 필요합니다.');
   }
   return `https://www.instagram.com${url.pathname.endsWith('/') ? url.pathname : url.pathname + '/'}`;
+}
+
+function contentTypes(value, defaults) {
+  if (value === undefined) return defaults;
+  if (!Array.isArray(value) || !value.length || value.length > 2 ||
+      value.some(type => !['place', 'event'].includes(type)) || new Set(value).size !== value.length) {
+    throw new Error('invalid_content_types');
+  }
+  return value;
+}
+
+function extractionRequest(body, defaults = ['place']) {
+  const parsed = typeof body === 'string' ? JSON.parse(body) : body;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid_body');
+  return { url: instagramLink(parsed.url), content_types: contentTypes(parsed.content_types, defaults) };
+}
+
+function extractorConfig(env = process.env) {
+  const token = env.PINMAP_EXTRACTOR_TOKEN;
+  let target;
+  try { target = new URL(env.PINMAP_EXTRACTOR_ORIGIN); } catch { return null; }
+  if (!token || target.protocol !== 'https:' || target.username || target.password ||
+      target.pathname !== '/' || target.search || target.hash) return null;
+  return { target: new URL('/extract-link', target), token };
+}
+
+function developerQuotaConfig(env = process.env) {
+  const origin = projectUrl(env.SUPABASE_URL);
+  const secret = String(env.SUPABASE_SECRET_KEY || '').trim();
+  return origin && /^sb_secret_[A-Za-z0-9_-]{8,}$/.test(secret)
+    ? { origin, secret } : null;
+}
+
+async function claimDeveloperQuota(config, fetcher = fetch) {
+  try {
+    const response = await fetcher(new URL('/rest/v1/rpc/pinmap_claim_developer_test', config.origin), {
+      method: 'POST',
+      headers: { apikey: config.secret, 'Content-Type': 'application/json' },
+      body: '{}', signal: AbortSignal.timeout(8000)
+    });
+    if (!response.ok) return { status: 503 };
+    const result = await response.json();
+    if (typeof result?.allowed !== 'boolean' || !Number.isInteger(result.remaining) || result.remaining < 0) {
+      return { status: 503 };
+    }
+    return { status: result.allowed ? 200 : 429, remaining: result.remaining };
+  } catch { return { status: 503 }; }
+}
+
+async function readJsonLimited(response) {
+  const declared = Number(response.headers?.get?.('content-length') || 0);
+  if (Number.isFinite(declared) && declared > MAX_EXTRACTOR_RESPONSE_BYTES) throw new Error('response_too_large');
+  let bytes = 0;
+  const chunks = [];
+  if (response.body && typeof response.body[Symbol.asyncIterator] === 'function') {
+    for await (const chunk of response.body) {
+      bytes += chunk.length;
+      if (bytes > MAX_EXTRACTOR_RESPONSE_BYTES) throw new Error('response_too_large');
+      chunks.push(Buffer.from(chunk));
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  }
+  const raw = await response.text();
+  if (Buffer.byteLength(raw, 'utf8') > MAX_EXTRACTOR_RESPONSE_BYTES) throw new Error('response_too_large');
+  return JSON.parse(raw);
+}
+
+async function forwardExtraction(payload, { env = process.env, fetcher = fetch, timeoutMs = 270000 } = {}) {
+  const config = extractorConfig(env);
+  if (!config) return { status: 503, body: { error: 'extractor_not_configured' } };
+  try {
+    const response = await fetcher(config.target, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.token}` },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!response.ok) return { status: 502, body: { error: 'extractor_rejected', upstream_status: response.status } };
+    const result = await readJsonLimited(response);
+    if (!result || !Array.isArray(result.results)) throw new Error('invalid_extractor_response');
+    return { status: 200, body: result };
+  } catch (error) {
+    return { status: error?.name === 'TimeoutError' ? 504 : 502,
+      body: { error: error?.name === 'TimeoutError' ? 'extractor_timeout' : 'extractor_unavailable' } };
+  }
 }
 
 module.exports = async function placeExtract(req, res) {
@@ -22,32 +111,27 @@ module.exports = async function placeExtract(req, res) {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'method_not_allowed' });
   }
-  const origin = process.env.PINMAP_EXTRACTOR_ORIGIN;
-  const backendToken = process.env.PINMAP_EXTRACTOR_TOKEN;
-  const accessCode = process.env.PINMAP_TEST_ACCESS_CODE;
-  if (!origin || !backendToken || !accessCode) return res.status(503).json({ error: 'online_test_not_configured' });
-  if (!equalSecret(req.headers['x-pinmap-test-code'], accessCode)) return res.status(401).json({ error: 'unauthorized' });
-  let target, link;
-  try {
-    target = new URL(origin);
-    if (target.protocol !== 'https:' || target.username || target.password || target.pathname !== '/' || target.search || target.hash) throw new Error('invalid origin');
-    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    link = instagramLink(body?.url);
-  } catch {
-    return res.status(400).json({ error: 'invalid_request' });
+  const quotaConfig = developerQuotaConfig();
+  if (!extractorConfig() || !process.env.PINMAP_TEST_ACCESS_CODE || !quotaConfig) {
+    return res.status(503).json({ error: 'online_test_not_configured' });
   }
-  try {
-    const response = await fetch(new URL('/extract-link', target), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${backendToken}` },
-      body: JSON.stringify({ url: link }),
-      signal: AbortSignal.timeout(270000)
-    });
-    const result = await response.json();
-    return res.status(response.ok ? 200 : 502).json(result);
-  } catch {
-    return res.status(502).json({ error: 'extractor_unavailable' });
+  if (!equalSecret(req.headers['x-pinmap-test-code'], process.env.PINMAP_TEST_ACCESS_CODE)) {
+    return res.status(401).json({ error: 'unauthorized' });
   }
+  let payload;
+  try { payload = extractionRequest(req.body, ['place']); }
+  catch { return res.status(400).json({ error: 'invalid_request' }); }
+  const quota = await claimDeveloperQuota(quotaConfig);
+  if (quota.status === 503) return res.status(503).json({ error: 'test_quota_unavailable' });
+  if (quota.status === 429) return res.status(429).json({ error: 'daily_test_limit', remaining: 0 });
+  const forwarded = await forwardExtraction(payload);
+  return res.status(forwarded.status).json(forwarded.body);
 };
 
 module.exports.instagramLink = instagramLink;
+module.exports.contentTypes = contentTypes;
+module.exports.extractionRequest = extractionRequest;
+module.exports.extractorConfig = extractorConfig;
+module.exports.developerQuotaConfig = developerQuotaConfig;
+module.exports.claimDeveloperQuota = claimDeveloperQuota;
+module.exports.forwardExtraction = forwardExtraction;

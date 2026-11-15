@@ -48,7 +48,7 @@ async function requestExtractor(pathname, payload, {env = process.env, fetcher =
 }
 
 export async function collectPublicLink(job, options = {}) {
-  const body = await requestExtractor('/extract-link', {url: job.source_url}, options);
+  const body = await requestExtractor('/extract-link', {url: job.source_url, content_types: ['place', 'event']}, options);
   const report = body?.results?.[0];
   if (!report || typeof report !== 'object' ||
       (report.source_url && report.source_url !== job.source_url)) {

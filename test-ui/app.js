@@ -2,6 +2,7 @@ const form = document.getElementById('form');
 const status = document.getElementById('status');
 const result = document.getElementById('result');
 const places = document.getElementById('places');
+const events = document.getElementById('events');
 const notes = document.getElementById('notes');
 const codeInput = document.getElementById('code');
 const openPrototype = document.getElementById('open-prototype');
@@ -11,7 +12,6 @@ let prototypeWindow = null;
 let awaitingPrototype = false;
 let awaitingImport = false;
 let transferTimer = null;
-codeInput.value = sessionStorage.getItem('pinmap.place-test-code') || '';
 
 function stopTransferTimer() {
   if (transferTimer !== null) clearTimeout(transferTimer);
@@ -89,35 +89,73 @@ function placeRows(report) {
   });
 }
 
+function eventDate(event) {
+  if (event.start_date && event.end_date) {
+    return event.start_date === event.end_date ? event.start_date : `${event.start_date} ~ ${event.end_date}`;
+  }
+  return event.start_date || event.end_date || event.date_text || '일정 확인 필요';
+}
+
+function renderEvents(report) {
+  const rows = Array.isArray(report?.events) ? report.events : [];
+  events.replaceChildren();
+  for (const event of rows) {
+    const li = document.createElement('li');
+    const title = document.createElement('strong');
+    title.textContent = event.title || '이벤트 이름 확인 필요';
+    li.append(title);
+    const detail = document.createElement('small');
+    const type = { exhibition: '전시', pop_up: '팝업', other: '이벤트' }[event.event_type] || '이벤트';
+    detail.textContent = [type, eventDate(event), event.time_text, event.venue_name, event.address]
+      .filter(Boolean).join(' · ');
+    li.append(detail);
+    if (event.needs_review) {
+      const review = document.createElement('small');
+      review.textContent = `확인 필요${event.notes?.length ? ': ' + event.notes.join(' / ') : ''}`;
+      li.append(review);
+    }
+    events.append(li);
+  }
+  return rows.length;
+}
+
 form.addEventListener('submit', async event => {
   event.preventDefault();
   const button = form.querySelector('button');
   button.disabled = true;
-  status.textContent = '서버에서 게시물을 수집하고 장소를 분석 중입니다. 몇 분 걸릴 수 있습니다.';
+  status.textContent = '서버에서 게시물을 수집하고 장소와 행사 일정을 분석 중입니다. 몇 분 걸릴 수 있습니다.';
   result.hidden = true;
   currentReport = null;
   stopTransferTimer();
   awaitingPrototype = false;
   awaitingImport = false;
   openPrototype.hidden = true;
-  sessionStorage.setItem('pinmap.place-test-code', codeInput.value);
   try {
     const response = await fetch('/api/place-extract', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Pinmap-Test-Code': codeInput.value },
-      body: JSON.stringify({ url: form.elements.url.value.trim() }),
+      body: JSON.stringify({ url: form.elements.url.value.trim(), content_types: ['place', 'event'] }),
       cache: 'no-store'
     });
     const data = await response.json();
     if (response.status === 401) {
-      sessionStorage.removeItem('pinmap.place-test-code');
       throw new Error('테스트 코드를 확인해 주세요.');
+    }
+    if (response.status === 429 && data.error === 'daily_test_limit') {
+      throw new Error('오늘 사용할 수 있는 개발 테스트 20회를 모두 사용했습니다. 내일 다시 시도해 주세요.');
+    }
+    if (response.status === 503 && data.error === 'test_quota_unavailable') {
+      throw new Error('테스트 사용량 확인에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+    }
+    if (response.status === 503 && data.error === 'online_test_not_configured') {
+      throw new Error('온라인 테스트 서버 설정이 완료되지 않았습니다.');
     }
     if (!response.ok) throw new Error(data.error || data.message || `서버 오류 ${response.status}`);
     const report = data.results?.[0];
     if (!report) throw new Error('서버 응답에 게시물 결과가 없습니다.');
     currentReport = report;
     const rows = placeRows(report);
+    const eventCount = renderEvents(report);
     places.replaceChildren();
     for (const row of rows) {
       const li = document.createElement('li');
@@ -146,9 +184,9 @@ form.addEventListener('submit', async event => {
     }
     document.getElementById('title').textContent = report.ai_title || '분석 결과';
     document.getElementById('summary').textContent = report.ai_summary || '';
-    document.getElementById('counts').textContent = `추출 ${rows.length}곳 · 좌표 확인 ${rows.filter(row => row.coordinates).length}곳 · 확인 필요 ${rows.filter(row => !row.coordinates).length}곳`;
+    document.getElementById('counts').textContent = `장소 ${rows.length}곳 · 지도 좌표 ${rows.filter(row => row.coordinates).length}곳 · 일정 ${eventCount}건`;
     document.getElementById('raw').textContent = JSON.stringify(data, null, 2);
-    status.textContent = rows.length ? '분석이 완료되었습니다.' : '분석은 끝났지만 추출한 장소가 없어 지도에 표시할 결과가 없습니다.';
+    status.textContent = rows.length || eventCount ? '분석이 완료되었습니다.' : '분석은 끝났지만 추출한 장소나 일정이 없습니다.';
     result.hidden = false;
     openPrototype.hidden = rows.length === 0;
   } catch (error) {

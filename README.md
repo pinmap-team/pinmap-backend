@@ -4,6 +4,10 @@ This repository owns the server-side Pinmap code. The public web UI lives in
 [`pinmap-web-prototype`](https://github.com/pinmap-team/pinmap-web-prototype),
 and the separate mobile app lives in the private `pinmap` repository.
 
+**[Open the online place extraction test](https://pinmap-backend.vercel.app/)** —
+paste an Instagram post or reel URL and enter the test code to inspect extracted
+places, map coordinates, review notes, and the raw server response.
+
 ## Modules
 
 | Directory | Deployment | Purpose |

@@ -27,6 +27,8 @@ and the separate mobile app lives in the private `pinmap` repository.
 3. Set `PINMAP_EXTRACTOR_ORIGIN` to the HTTPS Cloud Run origin. Keep Cloud Run's token check enabled.
 4. Check `/api/map-config`, `/api/auth/config`, and one authorized `POST /api/place-extract` before switching the public web rewrite to this project.
 
+The repository is private under the `pinmap-team` organization. The current Vercel Hobby plan does not permit automatic Git deployment from an organization-owned private repository, so deploy this Vercel project from a checkout with `vercel deploy --prod --scope stophyun02-projects` after backend changes. GitHub pushes alone do not update the running API. Keep `.vercel/` and local test access code files out of Git.
+
 No credentials, browser profiles, collected media, or generated results belong in Git. `.env.example` contains names only. Tests do not make paid AI or Places API requests.
 
 Run `npm test` to check the API and Python lookup logic. Cloud Run's `GET /health` verifies that its process is running; it does not guarantee Instagram access or upstream AI availability.

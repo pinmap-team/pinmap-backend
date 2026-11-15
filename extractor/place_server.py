@@ -393,6 +393,81 @@ def resolve_missing_addresses(places, caption=''):
     return notes
 
 
+def map_locations_from_places(places):
+    locations = []
+    for place in places:
+        if not valid_world_point(place.get('coordinates')):
+            continue
+        lookup = place.get('map_lookup') or {}
+        candidates = lookup.get('candidates') or []
+        confidence = candidates[0].get('score') if candidates else None
+        provider = place.get('coordinate_source')
+        location = {'name': place.get('name'), 'address': place.get('address'),
+                    'coordinates': place['coordinates'], 'source': place.get('source'),
+                    'coordinate_source': provider, 'provider': provider,
+                    'selection': place.get('map_selection', 'address_match'),
+                    'needs_review': bool(place.get('needs_review', True)),
+                    'review_required': bool(place.get('needs_review', True)),
+                    'evidence': place.get('evidence'),
+                    'evidence_ids': place.get('evidence_ids', [])}
+        if isinstance(confidence, (int, float)):
+            location['confidence'] = confidence
+        locations.append(location)
+    return locations
+
+
+def resolve_places_request(request):
+    """Resolve already extracted places without running collection or AI again."""
+    if not isinstance(request, dict) or not isinstance(request.get('places'), list):
+        raise ValueError('장소 목록이 필요합니다.')
+    rows = request['places']
+    if len(rows) > 20:
+        raise ValueError('한 번에 장소 20곳까지만 확인할 수 있습니다.')
+    places = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError('장소 항목 형식이 올바르지 않습니다.')
+        place = {}
+        for key, limit in (('name', 100), ('address', 300), ('area_hint', 100),
+                           ('search_keyword', 100), ('source', 80)):
+            value = row.get(key)
+            if value is not None and (not isinstance(value, str) or len(value) > limit):
+                raise ValueError('장소 항목의 ' + key + ' 값이 올바르지 않습니다.')
+            place[key] = value.strip() if value else None
+        if not place['name'] and not place['address']:
+            raise ValueError('장소 이름 또는 주소가 필요합니다.')
+        evidence_ids = row.get('evidence_ids', [])
+        if (not isinstance(evidence_ids, list) or len(evidence_ids) > 20 or
+                any(not isinstance(item, str) or not item or len(item) > 100 for item in evidence_ids)):
+            raise ValueError('근거 ID 형식이 올바르지 않습니다.')
+        place['evidence_ids'] = evidence_ids
+        evidence = row.get('evidence')
+        if evidence is not None:
+            if not isinstance(evidence, dict):
+                raise ValueError('장소 근거 형식이 올바르지 않습니다.')
+            clean_evidence = {}
+            for key, limit in (('quote', 1000), ('file', 180), ('kind', 80)):
+                value = evidence.get(key)
+                if value is not None and (not isinstance(value, str) or len(value) > limit):
+                    raise ValueError('장소 근거 형식이 올바르지 않습니다.')
+                if value:
+                    clean_evidence[key] = value
+            seconds = evidence.get('time_seconds')
+            if seconds is not None:
+                if not isinstance(seconds, (int, float)) or not 0 <= seconds <= 36000:
+                    raise ValueError('장소 근거 시간이 올바르지 않습니다.')
+                clean_evidence['time_seconds'] = seconds
+            place['evidence'] = clean_evidence
+        needs_review = row.get('needs_review', True)
+        if not isinstance(needs_review, bool):
+            raise ValueError('확인 필요 여부가 올바르지 않습니다.')
+        place['needs_review'] = needs_review
+        places.append(place)
+    notes = resolve_missing_addresses(places) if places else []
+    return {'schema_version': 1, 'places': places,
+            'map_locations': map_locations_from_places(places), 'notes': notes}
+
+
 def media_files(media_root, post_id):
     root = Path(media_root).expanduser().resolve() if media_root else HERE / 'data' / 'media'
     if not root.is_dir():
@@ -850,13 +925,7 @@ def extract_one(post, media_root=None, ignore_caption=False):
     ai_title, ai_summary, summary_error = ai_post_summary(caption, observed_text, places)
     if summary_error:
         notes.append(summary_error)
-    map_locations = [{'name': place.get('name'), 'address': place.get('address'),
-                      'coordinates': place['coordinates'], 'source': place.get('source'),
-                      'coordinate_source': place.get('coordinate_source'),
-                      'selection': place.get('map_selection', 'address_match'),
-                      'needs_review': bool(place.get('needs_review', True)),
-                      'evidence': place.get('evidence')}
-                     for place in places if valid_world_point(place.get('coordinates'))]
+    map_locations = map_locations_from_places(places)
     status = 'extracted' if places and all(not p['needs_review'] for p in places) else ('needs_review' if places else 'needs_media_or_ai')
     return {'post_id': post_id, 'source_url': post['source_url'], 'status': status,
             'ai_title': ai_title, 'ai_summary': ai_summary,
@@ -1093,13 +1162,21 @@ class Handler(BaseHTTPRequestHandler):
         if token and not hmac.compare_digest(supplied, 'Bearer ' + token):
             return self.respond(401, {'error': 'unauthorized'})
         parsed = urlparse(self.path)
-        if parsed.path not in ('/extract', '/media', '/extract-link'):
+        if parsed.path not in ('/extract', '/media', '/extract-link', '/resolve-places'):
             return self.respond(404, {'error': 'not_found'})
         try:
             size = int(self.headers.get('Content-Length', '0'))
-            limit = MAX_ZIP if parsed.path == '/extract' else (1024 * 1024 if parsed.path == '/extract-link' else 150 * 1024 * 1024)
+            limit = (MAX_ZIP if parsed.path == '/extract' else
+                     (128 * 1024 if parsed.path == '/resolve-places' else
+                      (1024 * 1024 if parsed.path == '/extract-link' else 150 * 1024 * 1024)))
             if size < 1 or size > limit:
                 raise ValueError('요청 파일 크기가 허용 범위를 벗어났습니다.')
+            if parsed.path == '/resolve-places':
+                if not self.headers.get('Content-Type', '').startswith('application/json'):
+                    raise ValueError('JSON 입력이 필요합니다.')
+                result = resolve_places_request(json.loads(self.rfile.read(size)))
+                self.respond(200, result)
+                return
             if parsed.path == '/extract-link':
                 request = json.loads(self.rfile.read(size))
                 result = extract_link(request.get('url', ''), request.get('ignore_caption') is True)

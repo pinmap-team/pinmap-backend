@@ -20,6 +20,7 @@ still shows its server notes and raw response in the test screen.
 | `api/` | Vercel | Validate test access, proxy Instagram links to Cloud Run, return browser-safe map and Supabase configuration. |
 | `extractor/` | Google Cloud Run | Fetch public Instagram media, analyze captions and frames, extract places, and search map candidates. |
 | `test-ui/` | Vercel static files | Login-free developer test screen with request status, extracted places, failures, and raw response. |
+| `packages/multiuser/` | Separate opt-in Node service; excluded from Vercel | Account-isolated ZIP/media imports, persistent jobs, and audio/visual analysis retained from the earlier local backend. It is not connected to the public Pinmap UI. |
 | `tests/`, `extractor/tests/` | CI/local | API boundary and place-search checks. |
 
 ## Request flow
@@ -39,6 +40,15 @@ still shows its server notes and raw response in the test screen.
 The repository is private under the `pinmap-team` organization. Vercel Hobby does not support its native Git auto-deploy for an organization-owned private repository. Instead, `.github/workflows/deploy-vercel.yml` deploys the Vercel project after the `Backend tests` workflow succeeds on a push to `main`. It checks out the exact tested commit and uses Vercel CLI with a project-scoped GitHub Actions secret. The GitHub repository variables `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` identify the existing Vercel project; `VERCEL_TOKEN` is a repository secret. Configure all three before enabling this workflow. A failed test run does not deploy.
 
 This workflow updates the Vercel API and development test screen. It does not redeploy the separate Cloud Run extractor. Keep `.vercel/` and local test access code files out of Git. If the workflow cannot run, deploy from a checkout with `vercel deploy --prod --scope stophyun02-projects` and inspect the failure in GitHub Actions.
+
+The earlier local AI backend is kept under `packages/multiuser/` as a separate
+service. Its own API, SQLite store, and worker do not share the Vercel routes or
+the official site's authentication. `.vercelignore` keeps this source out of
+the Vercel deployment; the CI workflow runs its tests separately. See the
+package README before running it. Public Instagram links and map candidate
+resolution use this repository's Cloud Run extractor rather than a second
+local copy of that pipeline. No historical user export or local database is
+included in the package.
 
 No credentials, browser profiles, collected media, or generated results belong in Git. `.env.example` contains names only. Tests do not make paid AI or Places API requests.
 

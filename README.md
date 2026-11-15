@@ -7,6 +7,11 @@ and the separate mobile app lives in the private `pinmap` repository.
 **[Open the online place extraction test](https://pinmap-backend.vercel.app/)** —
 paste an Instagram post or reel URL and enter the test code to inspect extracted
 places, map coordinates, review notes, and the raw server response.
+After analysis, **핀맵 지도에서 보기** opens the official prototype in a new tab
+and transfers the existing report to its development map. The test code stays
+in the backend test tab and is never included in the link or transfer message.
+The map button appears only when the report contains places; an empty result
+still shows its server notes and raw response in the test screen.
 
 ## Modules
 

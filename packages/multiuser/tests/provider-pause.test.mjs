@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {AppError} from '../lib/errors.mjs';
 import {openDatabase} from '../service/db.mjs';
 import {claimJob,pausedProviders,resumeProvider} from '../service/jobs.mjs';
@@ -17,6 +19,16 @@ function addJob(db,{id,user=id,provider='gemini',collectPublic=false,created=0})
 }
 
 const prepared=()=>({images:[],audio:[],evidence:[],coverage:{kind:'caption_only'}});
+
+test('queue control refuses a missing database without creating an empty one',async()=>{
+  const folder=await fs.mkdtemp(path.join(os.tmpdir(),'pinmap-missing-queue-'));
+  try{
+    const script=fileURLToPath(new URL('../service/queue-control.mjs',import.meta.url));
+    const run=spawnSync(process.execPath,[script,'status'],{env:{...process.env,MULTIUSER_DATA_DIR:folder},encoding:'utf8'});
+    assert.notEqual(run.status,0);
+    assert.deepEqual(await fs.readdir(folder),[]);
+  }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
 
 test('a provider quota error pauses only its queued paid-media jobs across workers and restart',async()=>{
   const folder=await fs.mkdtemp(path.join(os.tmpdir(),'pinmap-provider-pause-'));

@@ -37,9 +37,9 @@ still shows its server notes and raw response in the test screen.
 3. Set `PINMAP_EXTRACTOR_ORIGIN` to the HTTPS Cloud Run origin. Keep Cloud Run's token check enabled.
 4. Check `/api/map-config`, `/api/auth/config`, and one authorized `POST /api/place-extract` before switching the public web rewrite to this project.
 
-The repository is private under the `pinmap-team` organization. Vercel Hobby does not support its native Git auto-deploy for an organization-owned private repository. Instead, `.github/workflows/deploy-vercel.yml` deploys the Vercel project after the `Backend tests` workflow succeeds on a push to `main`. It checks out the exact tested commit and uses Vercel CLI with a project-scoped GitHub Actions secret. The GitHub repository variables `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` identify the existing Vercel project; `VERCEL_TOKEN` is a repository secret. Configure all three before enabling this workflow. A failed test run does not deploy.
+This repository is public under `pinmap-team` and is directly connected to the existing `pinmap-backend` Vercel project. A push to `main` deploys the Vercel API and development test screen; pull requests receive preview deployments. The `Backend tests` GitHub workflow still checks code, but Vercel's native Git deployment does not wait for that workflow to pass. Keep the Vercel project's Git Fork Protection enabled because preview environments contain server-only test credentials.
 
-This workflow updates the Vercel API and development test screen. It does not redeploy the separate Cloud Run extractor. Keep `.vercel/` and local test access code files out of Git. If the workflow cannot run, deploy from a checkout with `vercel deploy --prod --scope stophyun02-projects` and inspect the failure in GitHub Actions.
+Vercel Git deployment does not redeploy the separate Cloud Run extractor. Keep `.vercel/` and local test access code files out of Git. If deployment fails, inspect the project's Vercel deployment logs and the GitHub test result before making another change.
 
 The earlier local AI backend is kept under `packages/multiuser/` as a separate
 service. Its own API, SQLite store, and worker do not share the Vercel routes or

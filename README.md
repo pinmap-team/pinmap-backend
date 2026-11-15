@@ -27,7 +27,9 @@ and the separate mobile app lives in the private `pinmap` repository.
 3. Set `PINMAP_EXTRACTOR_ORIGIN` to the HTTPS Cloud Run origin. Keep Cloud Run's token check enabled.
 4. Check `/api/map-config`, `/api/auth/config`, and one authorized `POST /api/place-extract` before switching the public web rewrite to this project.
 
-The repository is private under the `pinmap-team` organization. The current Vercel Hobby plan does not permit automatic Git deployment from an organization-owned private repository, so deploy this Vercel project from a checkout with `vercel deploy --prod --scope stophyun02-projects` after backend changes. GitHub pushes alone do not update the running API. Keep `.vercel/` and local test access code files out of Git.
+The repository is private under the `pinmap-team` organization. Vercel Hobby does not support its native Git auto-deploy for an organization-owned private repository. Instead, `.github/workflows/deploy-vercel.yml` deploys the Vercel project after the `Backend tests` workflow succeeds on a push to `main`. It checks out the exact tested commit and uses Vercel CLI with a project-scoped GitHub Actions secret. The GitHub repository variables `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` identify the existing Vercel project; `VERCEL_TOKEN` is a repository secret. Configure all three before enabling this workflow. A failed test run does not deploy.
+
+This workflow updates the Vercel API and development test screen. It does not redeploy the separate Cloud Run extractor. Keep `.vercel/` and local test access code files out of Git. If the workflow cannot run, deploy from a checkout with `vercel deploy --prod --scope stophyun02-projects` and inspect the failure in GitHub Actions.
 
 No credentials, browser profiles, collected media, or generated results belong in Git. `.env.example` contains names only. Tests do not make paid AI or Places API requests.
 

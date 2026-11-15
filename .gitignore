@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+node_modules/
+extractor/data/
+extractor/.venv/
+extractor/__pycache__/
+extractor/.pytest_cache/
+.vercel/
+.DS_Store
+*.log

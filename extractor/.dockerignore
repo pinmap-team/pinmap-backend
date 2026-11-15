@@ -1,0 +1,12 @@
+data
+node_modules
+.venv
+tests
+bin
+*.command
+*.md
+ocr.swift
+__pycache__
+.env
+.env.*
+.git

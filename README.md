@@ -1,0 +1,32 @@
+# Pinmap backend and place extraction test
+
+This repository owns the server-side Pinmap code. The public web UI lives in
+[`pinmap-web-prototype`](https://github.com/pinmap-team/pinmap-web-prototype),
+and the separate mobile app lives in the private `pinmap` repository.
+
+## Modules
+
+| Directory | Deployment | Purpose |
+| --- | --- | --- |
+| `api/` | Vercel | Validate test access, proxy Instagram links to Cloud Run, return browser-safe map and Supabase configuration. |
+| `extractor/` | Google Cloud Run | Fetch public Instagram media, analyze captions and frames, extract places, and search map candidates. |
+| `test-ui/` | Vercel static files | Login-free developer test screen with request status, extracted places, failures, and raw response. |
+| `tests/`, `extractor/tests/` | CI/local | API boundary and place-search checks. |
+
+## Request flow
+
+1. The test screen sends an Instagram post/reel URL and test code to `POST /api/place-extract`.
+2. The Vercel function validates the code and URL, then calls the Cloud Run `/extract-link` endpoint with a server-only token.
+3. Cloud Run returns extracted places, coordinates, review flags, and source evidence. The test screen shows both the list and the raw JSON.
+4. The Pinmap web UI may consume the same API through a same-origin Vercel rewrite after the backend deployment is configured.
+
+## Setup and deployment
+
+1. Link this repository to a Vercel project. Set the Vercel values described in `.env.example` in its environment settings. The extraction token and test code must remain server-only.
+2. Deploy `extractor/` to Cloud Run from that directory's Dockerfile. Set `PINMAP_TEST_TOKEN` to the same value as Vercel's `PINMAP_EXTRACTOR_TOKEN`. Set the AI and map provider keys needed for the experiment in Cloud Run, not in Git.
+3. Set `PINMAP_EXTRACTOR_ORIGIN` to the HTTPS Cloud Run origin. Keep Cloud Run's token check enabled.
+4. Check `/api/map-config`, `/api/auth/config`, and one authorized `POST /api/place-extract` before switching the public web rewrite to this project.
+
+No credentials, browser profiles, collected media, or generated results belong in Git. `.env.example` contains names only. Tests do not make paid AI or Places API requests.
+
+Run `npm test` to check the API and Python lookup logic. Cloud Run's `GET /health` verifies that its process is running; it does not guarantee Instagram access or upstream AI availability.

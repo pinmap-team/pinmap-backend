@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Pinmap 장소 추출 개발 테스트</title>
+  <style>
+    :root{font-family:system-ui,sans-serif;color:#171717;background:#f5f5f5}*{box-sizing:border-box}
+    body{max-width:900px;margin:0 auto;padding:24px 16px 72px}h1{font-size:1.7rem;margin:0 0 8px}
+    p{line-height:1.5}.muted{color:#616161}.panel{background:white;border:1px solid #ddd;border-radius:16px;padding:20px;margin-top:16px}
+    label{display:block;font-weight:600;margin:12px 0 6px}input{font:inherit;width:100%;padding:12px;border:1px solid #aaa;border-radius:8px}
+    button{font:inherit;background:#111;color:white;border:0;border-radius:8px;padding:12px 20px;margin-top:16px;cursor:pointer}button:disabled{opacity:.55;cursor:wait}
+    #status{min-height:1.5em}ol{padding-left:24px}li{padding:10px 0;border-bottom:1px solid #eee}li:last-child{border:0}
+    small{display:block;color:#555;margin-top:4px}a{color:#1258a5}pre{overflow:auto;background:#f6f6f6;padding:16px;border-radius:8px;white-space:pre-wrap;word-break:break-word}
+  </style>
+</head>
+<body>
+  <h1>장소 추출 개발 테스트</h1>
+  <p class="muted">인스타그램 게시물이나 릴스 링크를 전송하고, 추출 결과와 서버 응답을 확인합니다.</p>
+  <form id="form" class="panel">
+    <label for="url">게시물 링크</label>
+    <input id="url" name="url" type="url" required placeholder="https://www.instagram.com/p/.../" autocomplete="off">
+    <label for="code">테스트 코드</label>
+    <input id="code" name="code" type="password" required autocomplete="off">
+    <button type="submit">분석하기</button>
+    <p id="status" role="status" aria-live="polite"></p>
+  </form>
+  <section id="result" class="panel" hidden>
+    <h2 id="title">분석 결과</h2>
+    <p id="summary"></p>
+    <p id="counts"></p>
+    <h3>추출한 장소</h3><ol id="places"></ol>
+    <h3>서버 안내</h3><ul id="notes"></ul>
+    <details><summary>원본 응답 JSON</summary><pre id="raw"></pre></details>
+  </section>
+  <script src="test-ui/app.js"></script>
+</body>
+</html>

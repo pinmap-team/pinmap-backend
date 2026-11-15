@@ -10,5 +10,3 @@ extractor/.pytest_cache/
 .DS_Store
 *.log
 핀맵_백엔드_테스트코드.txt
-.vercel
-.env*

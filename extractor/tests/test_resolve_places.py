@@ -69,6 +69,43 @@ class ResolvePlacesTests(unittest.TestCase):
                 thread.join(timeout=3)
                 server.server_close()
 
+    def test_missing_server_token_rejects_every_post(self):
+        with patch.dict(os.environ, {'PINMAP_TEST_TOKEN': ''}):
+            server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                url = 'http://127.0.0.1:%d/extract-link' % server.server_port
+                request = urllib.request.Request(url, data=b'{"url":"https://www.instagram.com/p/abcde/"}',
+                    headers={'Authorization': 'Bearer anything', 'Content-Type': 'application/json'})
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(request, timeout=3)
+                self.assertEqual(error.exception.code, 503)
+                self.assertEqual(json.load(error.exception)['error'], 'server_not_configured')
+            finally:
+                server.shutdown()
+                thread.join(timeout=3)
+                server.server_close()
+
+    def test_extract_link_rejects_non_object_json_before_collection(self):
+        with patch.dict(os.environ, {'PINMAP_TEST_TOKEN': 'private-test-token'}), \
+             patch('place_server.extract_link') as collect:
+            server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                url = 'http://127.0.0.1:%d/extract-link' % server.server_port
+                request = urllib.request.Request(url, data=b'[]', headers={
+                    'Authorization': 'Bearer private-test-token', 'Content-Type': 'application/json'})
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(request, timeout=3)
+                self.assertEqual(error.exception.code, 400)
+                collect.assert_not_called()
+            finally:
+                server.shutdown()
+                thread.join(timeout=3)
+                server.server_close()
+
 
 if __name__ == '__main__':
     unittest.main()

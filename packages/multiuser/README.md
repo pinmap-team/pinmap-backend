@@ -13,11 +13,12 @@ package's SQLite data. This package is not deployed by the root Vercel workflow.
 | `service/api.mjs` | Account sessions, per-user posts, Instagram ZIP/JSON import, media uploads, job/result retrieval. |
 | `service/db.mjs`, `service/jobs.mjs` | SQLite persistence, deduplication, per-user job queue and worker leases. |
 | `service/worker.mjs` | Analyze user-supplied media with the selected vision provider; transcribe audio when configured. |
-| `service/extractor-client.mjs` | Use the shared Cloud Run extractor for public Instagram links and place matching. |
+| `service/extractor-client.mjs` | Use the shared Cloud Run extractor for public Instagram links, place matching, and event schedules. |
 | `service/migrate-legacy.mjs` | Optional one-time import from a user-supplied older local catalog. |
 
-Public-link collection and place-name search are delegated to the existing
-Cloud Run extractor. Its Instagram access and upstream AI/Places availability
+Public-link collection, event schedule extraction, and place-name search are delegated to the existing
+Cloud Run extractor. Event schedules remain separate from map locations in each job result.
+Its Instagram access and upstream AI/Places availability
 still determine whether a particular link can be analyzed. The module's own
 vision providers (`gemini`, `ollama`, `vllm`) remain for uploaded photos and
 videos; ASR is configured separately for videos with audio. The old one-user

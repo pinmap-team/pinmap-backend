@@ -11,11 +11,13 @@ test('public links use the shared extractor and keep its token server-side', asy
     calls++;
     assert.equal(target.href, 'https://extractor.example.test/extract-link');
     assert.equal(init.headers.Authorization, 'Bearer private-token');
-    assert.deepEqual(JSON.parse(init.body), {url});
-    return Response.json({results: [{source_url: url, status: 'extracted', places: [], map_locations: []}]});
+    assert.deepEqual(JSON.parse(init.body), {url, content_types: ['place', 'event']});
+    return Response.json({results: [{source_url: url, status: 'extracted', content_kind: 'event',
+      events: [{title: '전시', start_date: '2026-04-01'}], places: [], map_locations: []}]});
   }});
   assert.equal(calls, 1);
   assert.equal(report.status, 'extracted');
+  assert.equal(report.events[0].title, '전시');
   await assert.rejects(collectPublicLink({source_url: url}, {env, fetcher: async () =>
     Response.json({results: [{source_url: 'https://www.instagram.com/p/other/'}]})}),
   error => error.code === 'extractor_response' && !error.message.includes('private-token'));

@@ -13,25 +13,27 @@ function browserWith(report) {
     querySelector() { return { disabled: false }; },
     addEventListener(type, callback) { listeners[`form:${type}`] = callback; }
   };
-  const elements = Object.fromEntries(['status', 'result', 'places', 'notes', 'code', 'open-prototype',
+  const elements = Object.fromEntries(['status', 'result', 'places', 'events', 'notes', 'code', 'open-prototype',
     'title', 'summary', 'counts', 'raw'].map(id => [id, {
     textContent: '', hidden: false, value: id === 'code' ? 'private-test-code' : '',
-    replaceChildren() {}, append() {}, addEventListener(type, callback) { listeners[`${id}:${type}`] = callback; }
+    children: [], replaceChildren() { this.children = []; }, append(...nodes) { this.children.push(...nodes); },
+    addEventListener(type, callback) { listeners[`${id}:${type}`] = callback; }
   }]));
   const sent = [];
   const opened = { postMessage(value, origin) { sent.push({ value, origin }); } };
   const urls = [];
+  const requests = [];
   const context = {
     document: {
       getElementById(id) { return id === 'form' ? form : elements[id]; },
-      createElement() { return { append() {}, textContent: '' }; }
+      createElement() { return { children: [], append(...nodes) { this.children.push(...nodes); }, textContent: '' }; }
     },
     window: {
       addEventListener(type, callback) { listeners[`window:${type}`] = callback; },
       open(url) { urls.push(url); return opened; }
     },
     sessionStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
-    fetch: async () => ({ ok: true, status: 200, json: async () => ({ results: [report] }) }),
+    fetch: async (_url, options) => { requests.push(options); return { ok: true, status: 200, json: async () => ({ results: [report] }) }; },
     setTimeout(callback) { const id = ++nextTimer; timers.set(id, callback); return id; },
     clearTimeout(id) { timers.delete(id); }
   };
@@ -45,7 +47,7 @@ function browserWith(report) {
     timers.delete(id);
     callback();
   };
-  return { listeners, elements, sent, opened, urls, timers, reply, expire };
+  return { listeners, elements, sent, opened, urls, requests, timers, reply, expire };
 }
 
 test('the completed report reaches only the opened official prototype, without the test code', async () => {
@@ -74,7 +76,25 @@ test('an empty extraction cannot open an empty prototype map', async () => {
   await listeners['form:submit']({ preventDefault() {} });
   assert.equal(elements.result.hidden, false);
   assert.equal(elements['open-prototype'].hidden, true);
-  assert.match(elements.status.textContent, /추출한 장소가 없어/);
+  assert.match(elements.status.textContent, /추출한 장소나 일정이 없습니다/);
+  listeners['open-prototype:click']();
+  assert.equal(urls.length, 0);
+});
+
+test('event-only report shows dates and review notes without opening an empty map', async () => {
+  const report = { post_id: 'ig_event', places: [], map_locations: [], content_kind: 'event', events: [{
+    title: '봄 전시', event_type: 'exhibition', start_date: '2026-04-01', end_date: '2026-04-30',
+    date_text: '4월', time_text: '11:00~18:00', venue_name: '전시장', address: null,
+    needs_review: true, notes: ['운영시간 확인 필요']
+  }] };
+  const { listeners, elements, urls, requests } = browserWith(report);
+  await listeners['form:submit']({ preventDefault() {} });
+  assert.equal(elements['open-prototype'].hidden, true);
+  assert.equal(elements.events.children.length, 1);
+  assert.match(elements.events.children[0].children[1].textContent, /2026-04-01 ~ 2026-04-30/);
+  assert.match(elements.events.children[0].children[2].textContent, /운영시간 확인 필요/);
+  assert.match(elements.counts.textContent, /일정 1건/);
+  assert.deepEqual(JSON.parse(requests[0].body).content_types, ['place', 'event']);
   listeners['open-prototype:click']();
   assert.equal(urls.length, 0);
 });

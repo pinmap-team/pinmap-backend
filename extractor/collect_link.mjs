@@ -12,7 +12,10 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const target = canonicalPost(process.argv[2]);
 const mode = process.argv[3] || 'caption';
 if(!['caption','media'].includes(mode)) throw Error('mode must be caption or media');
-const folder = path.join(root,'data','media','ig_'+target.code);
+// The HTTP server supplies a private directory for each extraction request.
+// Keep the old default for standalone local collection commands.
+const mediaRoot = process.env.PINMAP_MEDIA_ROOT || path.join(root,'data','media');
+const folder = path.join(mediaRoot,'ig_'+target.code);
 const profile = process.env.PINMAP_BROWSER_PROFILE_DIR || path.join(root,'data','browser');
 const report = {post_id:'ig_'+target.code,source_url:target.url,status:'unavailable',caption:'',media_files:[],notes:[]};
 let slideBackup=null;
@@ -117,16 +120,25 @@ try{
         }
       }
       if(target.kind!=='reel'||!report.media_files.length){
-        const seen=new Set();let count=0;
+        const seen=new Set();let count=0,totalSlideBytes=0,sizeLimitNoted=false;
+        const maxSlideBytes=12*1024*1024,maxTotalSlideBytes=96*1024*1024;
         for(let slide=0;slide<20;slide++){
           snapshot=await page.evaluate(readPublicDocument);
           for(const image of snapshot.images||[]){
             try{
               const response=await collector.context.request.get(image.src,{timeout:20000});
               if(!response.ok())continue;
+              const headers=response.headers(),declared=Number(headers['content-length']||0);
+              const mime=(headers['content-type']||'').split(';')[0].trim().toLowerCase();
+              if((mime&&!['image/jpeg','image/png','image/webp'].includes(mime))||declared>maxSlideBytes)continue;
               const bytes=await response.body(),hash=crypto.createHash('sha256').update(bytes).digest('hex');
+              if(bytes.length>maxSlideBytes||totalSlideBytes+bytes.length>maxTotalSlideBytes){
+                if(!sizeLimitNoted)report.notes.push('이미지 용량 제한으로 일부 슬라이드를 건너뛰었습니다.');
+                sizeLimitNoted=true;
+                continue;
+              }
               if(seen.has(hash))continue;
-              seen.add(hash);count++;
+              seen.add(hash);count++;totalSlideBytes+=bytes.length;
               const name='link-slide-'+String(count).padStart(2,'0')+'.jpg';
               await fs.writeFile(path.join(folder,name),bytes);
               report.media_files.push(name);

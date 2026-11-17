@@ -24,6 +24,7 @@ export function providerFromEnv(settings,env=process.env){
 export function desktopPlaceResult(report){
   if(!report||report.status==='collection_failed')throw new AppError(report?.notes?.[0]||'Instagram 원본에 접근하지 못했습니다.',{code:'public_collection_failed'});
   const evidence=[],facts=[],addresses=[],place_names=[];
+  const events=Array.isArray(report.events)?report.events:[];
   for(const [index,place] of (report.places||[]).entries()){
     const id=`desktop_${index}`,quote=place.evidence?.quote||'';
     evidence.push({id,kind:place.evidence?.kind||place.source||'link',text:quote,source_file:place.evidence?.file||null,time_seconds:place.evidence?.time_seconds??null});
@@ -31,7 +32,7 @@ export function desktopPlaceResult(report){
     if(place.address){const fact={field:'address',value:place.address,evidence_ids:[id],source:place.address_source||place.source};facts.push(fact);addresses.push(fact);}
   }
   const locations=(report.map_locations||[]).filter(loc=>Number.isFinite(loc.coordinates?.lat)&&Number.isFinite(loc.coordinates?.lng)).map(loc=>({...loc,source:'desktop_link',review_required:true,provider:loc.coordinate_source}));
-  return{result:{title:report.ai_title||'Instagram 링크 장소 추출',summary:report.ai_summary||`장소 ${report.places?.length||0}곳, 지도 위치 ${locations.length}곳`,facts,limitations:report.notes||[],map_location:{status:locations.length?'needs_verification':'address_missing',addresses,place_names,locations,name_lookups:[],coordinates:null}},evidence,coverage:{kind:'cloud_run_link',media_files:report.media_files||[],route:report.route||null},media_text:{visual:report.observed_text||[],audio:report.audio_transcripts||[],ocr:report.screen_text||[]}};
+  return{result:{title:report.ai_title||'Instagram 콘텐츠 분석',summary:report.ai_summary||`장소 ${report.places?.length||0}곳, 일정 ${events.length}건, 지도 위치 ${locations.length}곳`,content_kind:report.content_kind||'unknown',events,facts,limitations:report.notes||[],map_location:{status:locations.length?'needs_verification':'address_missing',addresses,place_names,locations,name_lookups:[],coordinates:null}},evidence,coverage:{kind:'cloud_run_link',content_kind:report.content_kind||'unknown',media_files:report.media_files||[],route:report.route||null},media_text:{visual:report.observed_text||[],audio:report.audio_transcripts||[],ocr:report.screen_text||[]}};
 }
 export async function processJob(db,job,{dataDir,provider,transcriber,prepare=prepareMedia,mapResolver=resolveMapLocations,desktopCollector=collectPublicLink,coverSaver=saveDesktopCover,leaseMs=20*60*1000}={}){
   const settings=JSON.parse(job.settings_json),workerId=job.worker_id;

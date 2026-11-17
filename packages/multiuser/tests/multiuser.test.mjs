@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createMultiuserApp} from '../service/api.mjs';
 import {claimJob,markExpiredJobs,enqueueImportedPosts,enqueueJob} from '../service/jobs.mjs';
-import {processJob} from '../service/worker.mjs';
+import {desktopPlaceResult,processJob} from '../service/worker.mjs';
 import {openDatabase} from '../service/db.mjs';
 import {VllmClient} from '../service/vllm-client.mjs';
 import {GeminiClient} from '../service/gemini-client.mjs';
@@ -17,6 +17,15 @@ import {syntheticSavedPostsZip} from './synthetic-instagram.mjs';
 const fixture=syntheticSavedPostsZip();
 const fixtureCount=125;
 const sampleResult={title:'시험',summary:'캡션 기반 요약',summary_evidence_ids:['caption'],topics:[],visible_text:[],facts:[],inferences:[],limitations:[]};
+test('public event schedule remains separate from map places in the saved job result',()=>{
+  const event={title:'봄 전시',event_type:'exhibition',start_date:'2026-04-01',end_date:'2026-04-30',
+    date_text:'4월 1일~30일',time_text:null,venue_name:'전시장',address:null,
+    source:'caption',evidence:{kind:'caption',quote:'4월 1일~30일'},needs_review:false,notes:[]};
+  const mapped=desktopPlaceResult({status:'needs_review',content_kind:'event',places:[],map_locations:[],events:[event],notes:[]});
+  assert.equal(mapped.result.content_kind,'event');
+  assert.deepEqual(mapped.result.events,[event]);
+  assert.deepEqual(mapped.result.map_location.locations,[]);
+});
 test('accounts isolate ZIP posts, assets, jobs, and results',async()=>{
   const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'pinmap-multi-'));
   const app=await createMultiuserApp({dataDir,env:{MULTIUSER_PORT:'0',PINMAP_INVITE_CODE:'invite-test-code',MULTIUSER_AI_PROVIDER:'ollama'}});

@@ -60,7 +60,7 @@ export async function createMultiuserApp({dataDir=path.resolve(process.env.MULTI
       if(req.method==='GET'&&url.pathname==='/health'){json(res,200,{ok:true,service:'pinmap-multiuser'});return;}
       if(req.method==='GET'&&url.pathname==='/api/map-config'){
         const googleBrowserKey=env.GOOGLE_MAPS_BROWSER_KEY||'';
-        json(res,200,{defaultProvider:googleBrowserKey?'google':'openfree',available:{openfree:true,google:Boolean(googleBrowserKey),kakao:false,naver:false},googleBrowserKey,kakaoJavaScriptKey:'',naverClientId:''});return;
+        json(res,200,{defaultProvider:'google',available:{google:Boolean(googleBrowserKey)},googleBrowserKey});return;
       }
       if(req.method==='GET'&&frontendDir&&!url.pathname.startsWith('/api/')){
         const route=decodeURIComponent(url.pathname);

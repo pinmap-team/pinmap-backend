@@ -3,7 +3,7 @@ FROM mcr.microsoft.com/playwright:v1.65.0-noble
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv ffmpeg tesseract-ocr tesseract-ocr-kor tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 RUN python3 -m venv /opt/pinmap-python \
-    && /opt/pinmap-python/bin/pip install --no-cache-dir yt-dlp
+    && /opt/pinmap-python/bin/pip install --no-cache-dir yt-dlp 'scrapling[fetchers]==0.5.1'
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -18,4 +18,4 @@ ENV PINMAP_BIND_HOST=0.0.0.0 \
     PINMAP_YT_DLP_BIN=/opt/pinmap-python/bin/yt-dlp
 USER pwuser
 EXPOSE 8210
-CMD ["sh", "-c", "exec python3 place_server.py serve --port ${PORT:-8210}"]
+CMD ["sh", "-c", "exec /opt/pinmap-python/bin/python place_server.py serve --port ${PORT:-8210}"]

@@ -87,6 +87,21 @@ class AnalysisPerformanceTests(unittest.TestCase):
         self.assertIsNone(error);self.assertTrue(parsed)
         self.assertEqual(len(seen[0]['contents'][0]['parts']),1)
 
+    def test_photo_carousel_does_not_skip_the_thirteenth_slide(self):
+        calls=[]
+        with tempfile.TemporaryDirectory() as temp:
+            images=[]
+            for i in range(13):
+                p=Path(temp)/('slide-%02d.jpg'%i);p.write_bytes(b'image')
+                images.append({'path':p,'source_file':p.name,'time_seconds':None})
+            def request(req):
+                calls.append(json.loads(req.data))
+                return {'candidates':[{'finishReason':'STOP','content':{'parts':[{'text':json.dumps({'places':[],'events':[],'title':'카페','summary':'소개'})}]}}]}
+            analyze_content('카페',[],images,[],[],[],True,False,SETTINGS,request)
+        parts=calls[0]['contents'][0]['parts']
+        self.assertEqual(sum('inline_data' in p for p in parts),13)
+        self.assertIn('파일: slide-06.jpg',[p.get('text')for p in parts])
+
     def test_truncated_model_response_falls_back_instead_of_returning_partial_data(self):
         parsed,error=analyze_content('전시',[],[],[],[],[],True,True,SETTINGS,lambda _: {'candidates':[{'finishReason':'MAX_TOKENS'}]})
         self.assertIsNone(parsed);self.assertTrue(error)

@@ -90,7 +90,9 @@ def analyze_content(caption, rows, images, transcripts, places, events, need_pla
                   'transcripts':transcripts,'known_places':places[:40],'known_events':events[:40]},ensure_ascii=False))
     content=[{'type':'input_text','text':prompt}];total=0
     selected=images if need_places or need_events else []
-    count=min(12,len(selected))
+    # Preserve every slide in a normal photo carousel; uniform frame sampling is for videos.
+    limit = 20 if all(i.get('time_seconds') is None for i in selected) else 12
+    count=min(limit,len(selected))
     selected=[selected[round(i*(len(selected)-1)/max(1,count-1))]for i in range(count)]
     for image in selected:
         path=Path(image['path']);mime={'.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.webp':'image/webp'}.get(path.suffix.lower())

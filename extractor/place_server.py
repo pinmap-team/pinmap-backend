@@ -1114,7 +1114,8 @@ def complete_ai_analysis(caption, rows, images, transcripts, screen_text, places
             if error:
                 notes.append(error)
             events[:] = dedupe_events(events + new_events)
-        title, summary, error = ai_post_summary(caption, rows, places, events)
+        summary_places = without_event_title_places(places, events) if places and events else places
+        title, summary, error = ai_post_summary(caption, rows, summary_places, events)
         if error:
             notes.append(error)
     return title, summary

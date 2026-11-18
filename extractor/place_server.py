@@ -1090,11 +1090,24 @@ def complete_ai_analysis(caption, rows, images, transcripts, screen_text, places
             and not without_event_title_places(places, events)):
         unified_places = False
         context['counts']['complete_event_roundup'] = 1
+    settings = ai_settings()
+    provider_key = settings.get('GEMINI_API_KEY' if settings.get('MULTIUSER_AI_PROVIDER', 'openai') == 'gemini' else 'OPENAI_API_KEY')
+    if (os.getenv('PINMAP_UNIFIED_ANALYSIS', '1') != '0' and provider_key
+            and not unified_places and not need_events):
+        # Only a summary remains: use the smaller summary schema directly, once.
+        summary_places = without_event_title_places(places, events) if places and events else places
+        with measure_stage(context, 'ai_summary'):
+            title, summary, error = ai_post_summary(caption, rows, summary_places, events)
+        if error:
+            notes.append(error)
+        context['ai_strategy'] = 'summary_only'
+        context['counts']['ai_pipeline_calls'] = 1
+        return title, summary
     bundle = None
     if os.getenv('PINMAP_UNIFIED_ANALYSIS', '1') != '0':
         with measure_stage(context, 'ai_unified'):
             bundle, error = analyze_content(caption, rows, images, transcripts, places, events,
-                                            unified_places, need_events, ai_settings(), request_json_with_retry)
+                                            unified_places, need_events, settings, request_json_with_retry)
         if error:
             notes.append(error)
     if bundle is not None:

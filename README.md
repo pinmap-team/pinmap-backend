@@ -66,3 +66,9 @@ included in the package.
 No credentials, browser profiles, collected media, or generated results belong in Git. `.env.example` contains names only. Tests do not make paid AI or Places API requests.
 
 Run `npm test` to check the API and Python lookup logic. Cloud Run's `GET /health` verifies that its process is running; it does not guarantee Instagram access or upstream AI availability.
+
+## Saved-place photo fallback
+
+`POST /api/content-photo` accepts only a saved content UUID and a location index, verifies the Supabase user, and reads that user's saved location. Existing post thumbnails take priority. Missing thumbnails use fresh Google Places photos matched by normalized name and coordinates within 150m. Store only `google_place_id` inside `map_locations`; never persist a Google photo name, URI or image bytes. Each displayed Google photo carries its author attribution and Google Maps source link.
+
+`GOOGLE_MAPS_SERVER_KEY` is server-only. The token-protected maintenance endpoint `POST /api/photo-backfill` fills missing place IDs in existing saved locations six at a time. It accepts no arbitrary database changes and returns only counts/cursors. It leaves original thumbnails, account ownership, source URLs and saved timestamps intact; changed content is skipped using its original update timestamp. Provider failures stop the batch for retry. The maintenance token is `PINMAP_EXTRACTOR_TOKEN` and must never enter browser code.

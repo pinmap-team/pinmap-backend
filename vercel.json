@@ -1,8 +1,20 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/place-extract.js": { "maxDuration": 300 },
-    "api/content-extract.js": { "maxDuration": 300 },
-    "api/content-save.js": { "maxDuration": 300 }
+    "api/place-extract.js": {
+      "maxDuration": 300
+    },
+    "api/content-extract.js": {
+      "maxDuration": 300
+    },
+    "api/content-save.js": {
+      "maxDuration": 300
+    },
+    "api/content-photo.js": {
+      "maxDuration": 60
+    },
+    "api/photo-backfill.js": {
+      "maxDuration": 120
+    }
   }
 }

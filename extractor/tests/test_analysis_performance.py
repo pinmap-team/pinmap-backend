@@ -87,6 +87,19 @@ class AnalysisPerformanceTests(unittest.TestCase):
         self.assertIsNone(error);self.assertTrue(parsed)
         self.assertEqual(len(seen[0]['contents'][0]['parts']),1)
 
+    def test_complete_event_roundup_does_not_create_a_redundant_venue_pipeline(self):
+        events=[{'title':'행사'+str(i),'start_date':'2026-11-19','venue_name':'미술관'}for i in range(2)]
+        places,notes,context=[],[],{}
+        with patch('place_server.ai_settings',return_value=SETTINGS), \
+             patch('place_server.ai_post_summary',return_value=('전시','소개',None))as summary, \
+             patch('place_server.analyze_content')as unified:
+            complete_ai_analysis('전시',[],[],[],[],places,events,True,True,notes,context)
+        unified.assert_not_called();summary.assert_called_once()
+        self.assertEqual(len(events),2);self.assertEqual(places,[])
+        self.assertEqual(context['counts']['complete_event_roundup'],1)
+        self.assertEqual(context['ai_strategy'],'summary_only')
+        self.assertEqual(context['counts']['ai_pipeline_calls'],1)
+
     def test_photo_carousel_does_not_skip_the_thirteenth_slide(self):
         calls=[]
         with tempfile.TemporaryDirectory() as temp:

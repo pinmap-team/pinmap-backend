@@ -72,3 +72,13 @@ Run `npm test` to check the API and Python lookup logic. Cloud Run's `GET /healt
 `POST /api/content-photo` accepts only a saved content UUID and a location index, verifies the Supabase user, and reads that user's saved location. Existing post thumbnails take priority. Missing thumbnails use fresh Google Places photos matched by normalized name and coordinates within 150m. Store only `google_place_id` inside `map_locations`; never persist a Google photo name, URI or image bytes. Each displayed Google photo carries its author attribution and Google Maps source link.
 
 `GOOGLE_MAPS_SERVER_KEY` is server-only. The token-protected maintenance endpoint `POST /api/photo-backfill` fills missing place IDs in existing saved locations six at a time. It accepts no arbitrary database changes and returns only counts/cursors. It leaves original thumbnails, account ownership, source URLs and saved timestamps intact; changed content is skipped using its original update timestamp. Provider failures stop the batch for retry. The maintenance token is `PINMAP_EXTRACTOR_TOKEN` and must never enter browser code.
+
+## Analysis performance
+
+The extractor removes exact duplicate still images before OCR (preferring slide evidence to a duplicate cover), while preserving separate video timestamps. The first OCR result is reused for place-photo matching, including empty/failed OCR results, rather than running Tesseract across the slides again. The 1-vCPU image sets `OMP_THREAD_LIMIT=1` to avoid CPU oversubscription.
+
+One structured model response supplies missing place/event candidates plus the title and summary. The existing source-file, date-grounding and review validators are shared with the previous paths. Already complete deterministic event candidates are retained; summary-only calls send no images. Invalid or incomplete unified responses fall back to the previous analysis functions. Set `PINMAP_UNIFIED_ANALYSIS=0` for the old AI-call path.
+
+Google/Naver place searches run with at most four concurrent requests and each unique name/area/keyword tuple is queried once per post. Candidate ranking, result order and review flags remain deterministic. Public fallback geocoding stays sequential and repeated identical addresses are reused. `PINMAP_MAP_LOOKUP_WORKERS=1` restores sequential searches.
+
+Structured `analysis_timing` logs and the extraction response's `analysis_metrics` report collection, preparation, OCR, AI, map search and image matching time, OCR image counts and the selected AI strategy. OCR source text is not duplicated in metrics or written to timing logs. Vercel's saved-content schema does not persist these diagnostics. Deploy and benchmark the Cloud Run image separately from Vercel.

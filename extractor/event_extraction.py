@@ -242,78 +242,82 @@ def ai_extract_events(caption, rows, transcripts, images, settings, requester):
         parsed = json.loads(text)
         if not isinstance(parsed, dict) or not isinstance(parsed.get('events'), list):
             raise ValueError('행사 일정 AI 응답 형식이 올바르지 않습니다.')
-        image_files = {row.get('source_file') for row in rows} | {img['source_file'] for img in images}
-        audio_files = {part.get('source_file') for part in transcripts}
-        found = []
-        for item in parsed.get('events', [])[:40]:
-            if not isinstance(item, dict) or any(not isinstance(item.get(field), str)
-                                                 for field in ('title', 'evidence', 'evidence_file', 'source')):
-                continue
-            title, quote = item['title'].strip()[:120], item['evidence'].strip()[:300]
-            filename = item['evidence_file'].strip()
-            source = item.get('source')
-            if (source not in ('caption', 'image', 'video_frame', 'ocr', 'audio') or
-                    not title or not quote or (source == 'caption' and filename) or
-                    (source in ('image', 'video_frame', 'ocr') and filename not in image_files) or
-                    (source == 'audio' and filename not in audio_files)):
-                continue
-            if source == 'caption' and quote not in caption:
-                continue
-            source_text = (caption if source == 'caption' else
-                           ' '.join(line for row in rows if row.get('source_file') == filename
-                                    for line in row.get('lines', [])) + ' ' +
-                           ' '.join(part.get('text', '') for part in transcripts
-                                    if part.get('source_file') == filename))
-            if source in ('audio', 'ocr') and quote not in source_text:
-                continue
-            raw_date = item.get('date_text')
-            raw_date = raw_date.strip()[:180] if isinstance(raw_date, str) else None
-            grounded_date = bool(raw_date and raw_date in source_text)
-            if grounded_date and quote in source_text:
-                start, end = source_text.find(quote), source_text.find(raw_date)
-                between = source_text[min(start, end):max(start, end)]
-                if abs(start - end) > 500 or len(EVENT_CUE.findall(between)) > 1:
-                    grounded_date = False
-            dates = explicit_dates(raw_date) if grounded_date else []
-            notes = []
-            if not grounded_date:
-                raw_date = None
-                notes.append('행사 날짜의 원문 근거를 확인해 주세요.')
-            elif not dates:
-                notes.append('날짜의 연도 또는 정확한 일자를 확인해 주세요.')
-            if len(dates) > 1 and dates[1] < dates[0]:
-                dates = dates[:1]
-                notes.append('종료일이 시작일보다 빨라 날짜 범위를 확인해 주세요.')
-            if len(dates) == 1:
-                notes.append('종료일이 명시되지 않았습니다.')
-            if title not in source_text:
-                if source in ('caption', 'audio', 'ocr'):
-                    if not EVENT_CUE.search(quote):
-                        continue
-                    title = quote[:120]
-                else:
-                    notes.append('행사 이름의 원문 근거를 확인해 주세요.')
-            if source in ('image', 'video_frame') and quote not in source_text:
-                notes.append('이미지의 행사 근거 문구를 문자 인식으로 교차 확인하지 못했습니다.')
-            venue_name = str(item['venue_name']).strip()[:120] if item.get('venue_name') else None
-            address = str(item['address']).strip()[:300] if item.get('address') else None
-            time_text = str(item['time_text']).strip()[:180] if item.get('time_text') else None
-            if time_text and time_text not in source_text:
-                time_text = None
-                notes.append('행사 시간의 원문 근거를 확인하지 못했습니다.')
-            if venue_name and venue_name not in source_text:
-                venue_name = None
-                notes.append('행사 장소 이름의 원문 근거를 확인하지 못했습니다.')
-            if address and address not in source_text:
-                address = None
-                notes.append('행사 주소의 원문 근거를 확인하지 못했습니다.')
-            found.append({'title': title, 'event_type': item.get('event_type') if item.get('event_type') in ('exhibition', 'pop_up', 'other') else event_type(title),
-                          'start_date': dates[0] if dates else None, 'end_date': dates[1] if len(dates) > 1 else None,
-                          'date_text': raw_date, 'time_text': time_text,
-                          'venue_name': venue_name, 'address': address,
-                          'source': 'ai_api', 'evidence': {'kind': item.get('source'), 'quote': quote,
-                                                         'file': filename or None},
-                          'needs_review': True, 'notes': notes})
-        return dedupe_events(found), None
+        return normalize_ai_events(parsed, caption, rows, transcripts, images)
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         return [], '행사 일정 AI 분석 실패: ' + str(exc)[:160]
+
+
+def normalize_ai_events(parsed, caption, rows, transcripts, images):
+    image_files = {row.get('source_file') for row in rows} | {img['source_file'] for img in images}
+    audio_files = {part.get('source_file') for part in transcripts}
+    found = []
+    for item in parsed.get('events', [])[:40]:
+        if not isinstance(item, dict) or any(not isinstance(item.get(field), str)
+                                             for field in ('title', 'evidence', 'evidence_file', 'source')):
+            continue
+        title, quote = item['title'].strip()[:120], item['evidence'].strip()[:300]
+        filename = item['evidence_file'].strip()
+        source = item.get('source')
+        if (source not in ('caption', 'image', 'video_frame', 'ocr', 'audio') or
+                not title or not quote or (source == 'caption' and filename) or
+                (source in ('image', 'video_frame', 'ocr') and filename not in image_files) or
+                (source == 'audio' and filename not in audio_files)):
+            continue
+        if source == 'caption' and quote not in caption:
+            continue
+        source_text = (caption if source == 'caption' else
+                       ' '.join(line for row in rows if row.get('source_file') == filename
+                                for line in row.get('lines', [])) + ' ' +
+                       ' '.join(part.get('text', '') for part in transcripts
+                                if part.get('source_file') == filename))
+        if source in ('audio', 'ocr') and quote not in source_text:
+            continue
+        raw_date = item.get('date_text')
+        raw_date = raw_date.strip()[:180] if isinstance(raw_date, str) else None
+        grounded_date = bool(raw_date and raw_date in source_text)
+        if grounded_date and quote in source_text:
+            start, end = source_text.find(quote), source_text.find(raw_date)
+            between = source_text[min(start, end):max(start, end)]
+            if abs(start - end) > 500 or len(EVENT_CUE.findall(between)) > 1:
+                grounded_date = False
+        dates = explicit_dates(raw_date) if grounded_date else []
+        notes = []
+        if not grounded_date:
+            raw_date = None
+            notes.append('행사 날짜의 원문 근거를 확인해 주세요.')
+        elif not dates:
+            notes.append('날짜의 연도 또는 정확한 일자를 확인해 주세요.')
+        if len(dates) > 1 and dates[1] < dates[0]:
+            dates = dates[:1]
+            notes.append('종료일이 시작일보다 빨라 날짜 범위를 확인해 주세요.')
+        if len(dates) == 1:
+            notes.append('종료일이 명시되지 않았습니다.')
+        if title not in source_text:
+            if source in ('caption', 'audio', 'ocr'):
+                if not EVENT_CUE.search(quote):
+                    continue
+                title = quote[:120]
+            else:
+                notes.append('행사 이름의 원문 근거를 확인해 주세요.')
+        if source in ('image', 'video_frame') and quote not in source_text:
+            notes.append('이미지의 행사 근거 문구를 문자 인식으로 교차 확인하지 못했습니다.')
+        venue_name = str(item['venue_name']).strip()[:120] if item.get('venue_name') else None
+        address = str(item['address']).strip()[:300] if item.get('address') else None
+        time_text = str(item['time_text']).strip()[:180] if item.get('time_text') else None
+        if time_text and time_text not in source_text:
+            time_text = None
+            notes.append('행사 시간의 원문 근거를 확인하지 못했습니다.')
+        if venue_name and venue_name not in source_text:
+            venue_name = None
+            notes.append('행사 장소 이름의 원문 근거를 확인하지 못했습니다.')
+        if address and address not in source_text:
+            address = None
+            notes.append('행사 주소의 원문 근거를 확인하지 못했습니다.')
+        found.append({'title': title, 'event_type': item.get('event_type') if item.get('event_type') in ('exhibition', 'pop_up', 'other') else event_type(title),
+                      'start_date': dates[0] if dates else None, 'end_date': dates[1] if len(dates) > 1 else None,
+                      'date_text': raw_date, 'time_text': time_text,
+                      'venue_name': venue_name, 'address': address,
+                      'source': 'ai_api', 'evidence': {'kind': item.get('source'), 'quote': quote,
+                                                     'file': filename or None},
+                      'needs_review': True, 'notes': notes})
+    return dedupe_events(found), None

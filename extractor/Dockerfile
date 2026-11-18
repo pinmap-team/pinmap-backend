@@ -13,7 +13,8 @@ COPY collector ./collector
 RUN mkdir -p /app/data/media \
     && chown -R pwuser:pwuser /app/data
 
-ENV PINMAP_BIND_HOST=0.0.0.0 \
+ENV OMP_THREAD_LIMIT=1 \
+    PINMAP_BIND_HOST=0.0.0.0 \
     PINMAP_BROWSER_CHANNEL=bundled \
     PINMAP_YT_DLP_BIN=/opt/pinmap-python/bin/yt-dlp
 USER pwuser

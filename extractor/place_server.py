@@ -1082,16 +1082,24 @@ def complete_ai_analysis(caption, rows, images, transcripts, screen_text, places
     need_places = want_places and (not places or any(p['needs_review'] for p in places))
     need_events = want_events and event_signals(caption, rows, transcripts) and (
         not events or any(not e['start_date'] or not e['venue_name'] for e in events))
+    # A complete event roundup has no independent venue candidates to re-extract.
+    # Preserve its deterministic schedules instead of creating a second venue/map/photo pipeline.
+    unified_places = need_places
+    if (want_events and len(events) >= 2
+            and all(e.get('start_date') and e.get('venue_name') for e in events)
+            and not without_event_title_places(places, events)):
+        unified_places = False
+        context['counts']['complete_event_roundup'] = 1
     bundle = None
     if os.getenv('PINMAP_UNIFIED_ANALYSIS', '1') != '0':
         with measure_stage(context, 'ai_unified'):
             bundle, error = analyze_content(caption, rows, images, transcripts, places, events,
-                                            need_places, need_events, ai_settings(), request_json_with_retry)
+                                            unified_places, need_events, ai_settings(), request_json_with_retry)
         if error:
             notes.append(error)
     if bundle is not None:
         try:
-            new_places, _ = normalize_ai_places(bundle, images, transcripts) if need_places else ([], None)
+            new_places, _ = normalize_ai_places(bundle, images, transcripts) if unified_places else ([], None)
             new_events, _ = normalize_ai_events(bundle, caption, rows, transcripts, images) if need_events else ([], None)
             title, summary, _ = normalize_ai_summary(bundle)
             places[:] = dedupe(places + new_places)

@@ -1059,6 +1059,29 @@ def canonical_link(url):
 
 def collect_link(url, mode, media_root=None, browser_profile=None):
     url = canonical_link(url)
+    if os.getenv('PINMAP_SCRAPLING_ENABLED', '1') != '0':
+        started = time.monotonic()
+        try:
+            from collect_link_http import collect_photos, FastCollectionUnavailable
+            marker = Path(media_root) / '.http-unavailable' if media_root else None
+            if marker and marker.exists():
+                raise FastCollectionUnavailable('previous_fast_attempt_failed')
+            report = collect_photos(url, media_root)
+            print(json.dumps({'stage': 'collection', 'method': 'scrapling_http',
+                              'mode': mode, 'seconds': round(time.monotonic() - started, 3),
+                              'files': len(report['media_files'])}), file=sys.stderr, flush=True)
+            return report
+        except Exception as exc:
+            # Log a bounded category only; remote content and signed URLs are never logged.
+            from collect_link_http import FastCollectionUnavailable
+            if media_root:
+                Path(media_root).mkdir(parents=True, exist_ok=True)
+                (Path(media_root) / '.http-unavailable').touch()
+            reason = str(exc) if isinstance(exc, FastCollectionUnavailable) else type(exc).__name__
+            print(json.dumps({'stage': 'collection', 'method': 'browser_fallback',
+                              'mode': mode, 'reason': reason[:80],
+                              'seconds': round(time.monotonic() - started, 3)}),
+                  file=sys.stderr, flush=True)
     command = ['node', str(HERE / 'collect_link.mjs'), url, mode]
     environment = dict(os.environ)
     if media_root is not None:

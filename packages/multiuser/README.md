@@ -74,3 +74,5 @@ For a one-time import from the old local catalog, point `SOURCE_ROOT` at the
 user-owned `pinmap-items.json` source and run
 `npm run migrate:legacy -- user@example.com` after creating that account.
 That source and the old `.data-ollama` directory stay outside Git.
+
+Daily analysis counts are not limited by this service. The per-account queue capacity and worker concurrency remain independent controls; upstream provider quota pauses are still handled by the existing queue logic. `MULTIUSER_DAILY_JOB_LIMIT` is no longer read.

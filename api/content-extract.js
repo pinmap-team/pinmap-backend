@@ -23,39 +23,12 @@ async function authenticatedUser(config, token, fetcher = fetch) {
     if (!/^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(user?.id || '')) {
       return { status: 401 };
     }
-    // A fresh anonymous account would evade a per-user quota. Require an
-    // explicitly permanent Supabase user before allowing paid extraction.
+    // Only explicitly permanent Supabase accounts may request extraction.
     if (user.is_anonymous !== false) return { status: 403 };
     return { status: 200, userId: user.id };
   } catch {
     return { status: 503 };
   }
-}
-
-async function claimQuota(config, token, fetcher = fetch) {
-  try {
-    const response = await fetcher(new URL('/rest/v1/rpc/pinmap_claim_content_extraction', config.origin), {
-      method: 'POST',
-      headers: { apikey: config.key, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: '{}',
-      signal: AbortSignal.timeout(8000)
-    });
-    if (!response.ok) return { status: 503 };
-    const result = await response.json();
-    if (typeof result?.allowed !== 'boolean' || !Number.isInteger(result.remaining) || result.remaining < 0) {
-      return { status: 503 };
-    }
-    return { status: result.allowed ? 200 : 429, remaining: result.remaining };
-  } catch {
-    return { status: 503 };
-  }
-}
-
-function secondsUntilSeoulMidnight(now = Date.now()) {
-  const day = 24 * 60 * 60 * 1000;
-  const kst = 9 * 60 * 60 * 1000;
-  const nextMidnight = (Math.floor((now + kst) / day) + 1) * day - kst;
-  return Math.max(1, Math.ceil((nextMidnight - now) / 1000));
 }
 
 module.exports = async function contentExtract(req, res) {
@@ -75,12 +48,6 @@ module.exports = async function contentExtract(req, res) {
   if (!token) return res.status(401).json({ error: 'authentication_required' });
   const auth = await authenticatedUser(config, token);
   if (auth.status !== 200) return res.status(auth.status).json({ error: auth.status === 503 ? 'auth_unavailable' : 'authentication_required' });
-  const quota = await claimQuota(config, token);
-  if (quota.status === 503) return res.status(503).json({ error: 'quota_unavailable' });
-  if (quota.status === 429) {
-    res.setHeader('Retry-After', String(secondsUntilSeoulMidnight()));
-    return res.status(429).json({ error: 'daily_extraction_limit', remaining: 0 });
-  }
   const forwarded = await forwardExtraction(payload);
   return res.status(forwarded.status).json(forwarded.body);
 };
@@ -88,5 +55,3 @@ module.exports = async function contentExtract(req, res) {
 module.exports.supabaseConfig = supabaseConfig;
 module.exports.bearerToken = bearerToken;
 module.exports.authenticatedUser = authenticatedUser;
-module.exports.claimQuota = claimQuota;
-module.exports.secondsUntilSeoulMidnight = secondsUntilSeoulMidnight;

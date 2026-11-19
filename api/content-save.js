@@ -1,6 +1,5 @@
 const { extractionRequest, extractorConfig, forwardExtraction, instagramLink } = require('./place-extract');
-const { supabaseConfig, bearerToken, authenticatedUser, claimQuota,
-  secondsUntilSeoulMidnight } = require('./content-extract');
+const { supabaseConfig, bearerToken, authenticatedUser } = require('./content-extract');
 
 const MAX_REQUEST_BYTES = 4096;
 const MAX_DATABASE_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -11,7 +10,7 @@ const SELECT = 'id,user_id,source_url,content_kind,status,ai_title,ai_summary,au
   'author_profile_data_url,cover_data_url,places,events,map_locations,extraction_notes,' +
   'media_warnings,created_at,updated_at';
 
-// The public key verifies the caller and claims the user's quota. Only this
+// The public key verifies the caller. Only this
 // server holds the separate secret key used to write trusted analysis records.
 function storageConfig(publicConfig, env = process.env) {
   const secret = String(env.SUPABASE_SECRET_KEY || '').trim();
@@ -326,12 +325,6 @@ module.exports = async function contentSave(req, res) {
     return res.status(503).json({ error: 'storage_unavailable' });
   }
   if (!extractorConfig()) return res.status(503).json({ error: 'content_extraction_not_configured' });
-  const quota = await claimQuota(config, token);
-  if (quota.status === 503) return res.status(503).json({ error: 'quota_unavailable' });
-  if (quota.status === 429) {
-    res.setHeader('Retry-After', String(secondsUntilSeoulMidnight()));
-    return res.status(429).json({ error: 'daily_extraction_limit', remaining: 0 });
-  }
   const forwarded = await forwardExtraction(payload, { timeoutMs: 245000 });
   const result = forwarded.status === 200 && Array.isArray(forwarded.body.results) &&
     forwarded.body.results.length === 1 ? forwarded.body.results[0] : null;

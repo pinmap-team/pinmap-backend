@@ -52,11 +52,6 @@ test('developer endpoint remains place-only by default and accepts explicit even
     process.env.SUPABASE_URL = 'https://project.supabase.co';
     process.env.SUPABASE_SECRET_KEY = 'sb_secret_test_private';
     global.fetch = async (url, options) => {
-      if (String(url).endsWith('/rpc/pinmap_claim_developer_test')) {
-        assert.equal(options.headers.apikey, 'sb_secret_test_private');
-        assert.equal(options.headers.Authorization, undefined);
-        return new Response(JSON.stringify({allowed:true,remaining:19}), {status:200});
-      }
       assert.equal(String(url), 'https://backend.example/extract-link');
       payloads.push(JSON.parse(options.body));
       return new Response(JSON.stringify({schema_version: 1, results: [{places: [], events: []}]}), {status: 200});
@@ -76,34 +71,14 @@ test('developer endpoint remains place-only by default and accepts explicit even
   }
 });
 
-test('developer quota rejection and missing storage stop paid analysis', async () => {
-  const names = ['PINMAP_EXTRACTOR_ORIGIN','PINMAP_EXTRACTOR_TOKEN','PINMAP_TEST_ACCESS_CODE',
-    'SUPABASE_URL','SUPABASE_SECRET_KEY'];
-  const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
-  const previousFetch = global.fetch;
-  try {
-    process.env.PINMAP_EXTRACTOR_ORIGIN = 'https://backend.example';
-    process.env.PINMAP_EXTRACTOR_TOKEN = 'backend-secret';
-    process.env.PINMAP_TEST_ACCESS_CODE = 'access-secret';
-    process.env.SUPABASE_URL = 'https://project.supabase.co';
-    process.env.SUPABASE_SECRET_KEY = 'sb_secret_test_private';
-    let calls = 0;
-    global.fetch = async url => {
-      calls++;
-      assert(String(url).endsWith('/rpc/pinmap_claim_developer_test'));
-      return new Response(JSON.stringify({allowed:false,remaining:0}), {status:200});
-    };
-    let res = await request('POST','access-secret',{url:'https://instagram.com/p/abc/'});
-    assert.equal(res.code,429);
-    assert.equal(res.body.error,'daily_test_limit');
-    assert.equal(calls,1);
-
-    delete process.env.SUPABASE_SECRET_KEY;
-    res = await request('POST','access-secret',{url:'https://instagram.com/p/abc/'});
-    assert.equal(res.code,503);
-    assert.equal(calls,1);
-  } finally {
-    global.fetch = previousFetch;
-    for (const name of names) saved[name] === undefined ? delete process.env[name] : process.env[name] = saved[name];
-  }
+test('developer analyses exceed twenty calls without a quota database',async()=>{
+  const names=['PINMAP_EXTRACTOR_ORIGIN','PINMAP_EXTRACTOR_TOKEN','PINMAP_TEST_ACCESS_CODE','SUPABASE_URL','SUPABASE_SECRET_KEY'];
+  const saved=Object.fromEntries(names.map(n=>[n,process.env[n]])),previousFetch=global.fetch;let calls=0;
+  try{
+    process.env.PINMAP_EXTRACTOR_ORIGIN='https://backend.example';process.env.PINMAP_EXTRACTOR_TOKEN='backend-secret';process.env.PINMAP_TEST_ACCESS_CODE='access-secret';
+    delete process.env.SUPABASE_URL;delete process.env.SUPABASE_SECRET_KEY;
+    global.fetch=async url=>{assert(String(url).endsWith('/extract-link'));calls++;return new Response(JSON.stringify({results:[]}),{status:200})};
+    for(let i=0;i<24;i++){const res=await request('POST','access-secret',{url:'https://instagram.com/p/abc/'});assert.equal(res.code,200)}
+    assert.equal(calls,24);
+  }finally{global.fetch=previousFetch;for(const n of names)saved[n]===undefined?delete process.env[n]:process.env[n]=saved[n]}
 });

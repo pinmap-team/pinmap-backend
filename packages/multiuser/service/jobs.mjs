@@ -18,8 +18,6 @@ export async function enqueueJob(db,userId,postId,settings,{force=false,requireV
   const {material,fingerprint}=collectPublic?{material:{caption:post.caption,assets:[],collect_public:true},fingerprint:crypto.createHash('sha256').update(JSON.stringify({url:post.source_url,settings,promptVersion:PROMPT_VERSION,collect_public:true})).digest('hex')}:await snapshotInput(materialPost,{...settings,promptVersion:PROMPT_VERSION});
   const existing=db.prepare(`SELECT * FROM jobs WHERE user_id=? AND post_id=? AND fingerprint=? AND status IN ('queued','preparing','summarizing','completed') ORDER BY created_at DESC LIMIT 1`).get(userId,postId,fingerprint);
   if(existing&&(!force||existing.status!=='completed'))return{job:publicJob(existing),reused:true};
-  const today=db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE user_id=? AND created_at>=? AND status!='cancelled'").get(userId,new Date(Date.now()-86400000).toISOString()).n;
-  if(today>=settings.dailyJobLimit)throw new AppError('계정의 24시간 AI 작업 한도에 도달했습니다.',{code:'daily_job_quota',status:429});
   const active=db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE user_id=? AND status IN ('queued','preparing','summarizing')").get(userId).n;
   if(active>=25)throw new AppError('계정당 대기·진행 작업은 25건까지입니다.',{code:'queue_quota',status:429});
   const id=crypto.randomUUID(),date=now();

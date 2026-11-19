@@ -2,7 +2,7 @@
 
 이 저장소는 핀맵의 서버 측 코드를 관리합니다. 공개 웹 UI는 [`pinmap-web-prototype`](https://github.com/pinmap-team/pinmap-web-prototype)에 있으며, 별도의 모바일 앱은 비공개 `pinmap` 저장소에 있습니다.
 
-**[온라인 추출 테스트 열기](https://pinmap-backend.vercel.app/)** — 인스타그램 게시물 또는 릴스 URL과 테스트 코드를 입력하면 추출된 장소, 행사 일정, 지도 좌표, 검토 메모, 서버 원본 응답을 확인할 수 있습니다. 분석 후 **핀맵 지도에서 보기**를 누르면 공식 프로토타입이 새 탭으로 열리고 기존 분석 결과가 개발용 지도로 전달됩니다. 테스트 코드는 백엔드 테스트 탭에만 남으며 링크나 전달 메시지에는 포함되지 않습니다. 지도 버튼은 결과에 장소가 있을 때만 표시됩니다. 결과가 비어 있어도 테스트 화면에서 서버 메모와 원본 응답을 확인할 수 있습니다.
+백엔드 Vercel 프로젝트는 공식 핀맵의 API를 제공합니다. 별도 테스트 웹 화면은 운영하지 않으며, 로그인 계정에서 장소·일정 추출과 저장을 시험할 수 있습니다. Vercel 프로젝트와 `/api/*` 경로는 공식 웹의 로그인·저장·분석 기능에 필요합니다.
 
 ## 모듈
 
@@ -10,17 +10,16 @@
 | --- | --- | --- |
 | `api/` | Vercel | 개발자 테스트 경로, 인증이 필요한 콘텐츠 추출과 계정별 저장·목록·삭제 API를 제공하고, 브라우저에 공개해도 되는 지도 및 Supabase 설정을 반환합니다. |
 | `extractor/` | Google Cloud Run | 공개 인스타그램 미디어를 가져와 캡션과 이미지 프레임을 분석하고, 장소와 행사 날짜를 각각 추출하며 지도 검색 후보를 찾습니다. |
-| `test-ui/` | Vercel 정적 파일 | 요청 상태, 장소, 행사 일정, 실패 원인, 원본 응답을 보여주는 개발자 테스트 화면입니다. |
 | `packages/multiuser/` | 별도로 선택해 실행하는 Node 서비스. Vercel 배포에서는 제외 | 이전 로컬 백엔드에서 가져온 계정별 ZIP·미디어 가져오기, 영속 작업, 오디오·시각 분석 기능입니다. 공개 핀맵 UI에는 연결되지 않습니다. |
 | `database/` | 공식 Supabase 프로젝트에 적용 | 하루 단위 추출 횟수를 원자적으로 제한하고 계정별 저장 콘텐츠를 관리합니다. 쓰기 작업은 서버에서만 허용합니다. |
 | `tests/`, `extractor/tests/` | CI·로컬 | API 경계, 장소 검색, OCR, 행사 일정 파싱을 검사합니다. |
 
 ## 요청 흐름
 
-1. 개발자 테스트 화면은 인스타그램 게시물·릴스 URL, 테스트 코드, `content_types: ["place", "event"]`를 `POST /api/place-extract`에 보냅니다. 서버에서 공유하는 제한에 따라 서울 날짜 기준 하루 최대 20회의 개발자 분석을 허용합니다. `content_types`를 생략하는 기존 호출은 장소만 분석합니다.
+1. 개발자 테스트 API는 인스타그램 게시물·릴스 URL, 테스트 코드, `content_types: ["place", "event"]`를 `POST /api/place-extract`에서 받습니다. 서버에서 공유하는 제한에 따라 서울 날짜 기준 하루 최대 20회의 개발자 분석을 허용합니다. `content_types`를 생략하는 기존 호출은 장소만 분석합니다.
 2. 공식 `POST /api/content-save` 경로는 Supabase 사용자 액세스 토큰을 요구합니다. 저장 테이블을 확인한 뒤 Cloud Run에 요청하기 전에 Supabase에서 사용자별 하루 5회 분석 한도 중 1회를 사용합니다. 기본적으로 장소와 행사 두 종류를 모두 분석합니다. `POST /api/content-extract`는 같은 한도를 적용하는 인증된 추출 전용 경로로 유지됩니다.
 3. Vercel은 URL을 검증하고 서버 전용 토큰을 사용해 Cloud Run의 `/extract-link`로 요청을 전달합니다. Cloud Run은 지도 핀에 사용할 `places`와 `map_locations`를 반환합니다. 날짜, 시간 문구, 장소, 근거, 검토 필요 여부가 포함된 `events`도 별도로 반환합니다. 연도가 없거나 날짜가 불확실하면 검토할 수 있도록 구조화하지 않은 원문으로 남깁니다.
-4. 공식 저장 경로는 서버 전용 비밀 키를 사용해, 허용된 필드와 크기로 제한한 분석 결과를 로그인한 사용자의 Supabase 행에 저장합니다. 브라우저는 분석 필드를 데이터베이스에 직접 쓸 수 없습니다. `GET /api/content-save`는 저장 항목을 불러오고 `DELETE /api/content-save`는 항목을 삭제합니다. 분석에 실패한 링크도 `content_kind: "unknown"`으로 저장할 수 있지만, 같은 링크의 이전 성공 결과를 덮어쓰지는 않습니다. 개발자 테스트 화면은 장소 결과를 프로토타입 지도로 전달할 수 있으나, 테스트 코드로 호출하는 경로는 결과를 영구 저장하지 않습니다. 별도의 다중 사용자 서비스는 자체 저장소와 인증 방식을 사용합니다.
+4. 공식 저장 경로는 서버 전용 비밀 키를 사용해, 허용된 필드와 크기로 제한한 분석 결과를 로그인한 사용자의 Supabase 행에 저장합니다. 브라우저는 분석 필드를 데이터베이스에 직접 쓸 수 없습니다. `GET /api/content-save`는 저장 항목을 불러오고 `DELETE /api/content-save`는 항목을 삭제합니다. 분석에 실패한 링크도 `content_kind: "unknown"`으로 저장할 수 있지만, 같은 링크의 이전 성공 결과를 덮어쓰지는 않습니다. 테스트 코드로 호출하는 개발자 경로는 결과를 영구 저장하지 않습니다. 별도의 다중 사용자 서비스는 자체 저장소와 인증 방식을 사용합니다.
 
 ## 인스타그램 수집 방식
 
@@ -34,14 +33,14 @@ Cloud Run 추출기는 먼저 Scrapling HTTP 요청으로 지정된 공개 사�
 
 1. `SUPABASE_URL`이 가리키는 동일한 Supabase 프로젝트에 [`database/001_content_extraction_quota.sql`](database/001_content_extraction_quota.sql), [`database/002_saved_content.sql`](database/002_saved_content.sql), [`database/003_developer_test_quota.sql`](database/003_developer_test_quota.sql)을 순서대로 적용합니다. 각 변경의 적용 여부를 기록하세요. 이 파일들은 순서대로 한 번씩 실행하도록 작성되었습니다. 필요한 함수와 테이블이 없으면 API는 추출기에 요청하지 않고 `503`을 반환합니다. 저장 콘텐츠는 계정당 100개로 제한됩니다. 분석 결과 행은 백엔드만 쓸 수 있으며, 인증된 사용자는 백엔드를 통해 자신의 행만 읽을 수 있습니다.
 2. `extractor/`의 Dockerfile을 사용해 Cloud Run에 배포합니다. `PINMAP_TEST_TOKEN`에는 Vercel의 `PINMAP_EXTRACTOR_TOKEN`과 동일한 서버 전용 값을 설정합니다. AI 키와 지도 제공자 키는 Git이 아닌 Cloud Run에 설정합니다. Cloud Run 배포 버전은 별도로 배포하고 확인해야 합니다. Vercel의 Git 배포는 Cloud Run을 업데이트하지 않습니다.
-3. 이 저장소를 Vercel 프로젝트에 연결하고 `.env.example`에 설명된 Vercel 환경 변수들을 설정합니다. `SUPABASE_PUBLISHABLE_KEY`는 설계상 공개 키입니다. 새 API 경로를 배포하기 전에 `SUPABASE_SECRET_KEY`(`sb_secret_…`)를 **서버 전용** Vercel 환경 변수로 설정합니다. 이 값을 브라우저, Git, URL, 채팅에 넣지 마세요. 추출기 토큰은 서버에만 보관합니다. 개발자 테스트 코드는 Vercel에 설정하고 테스트 양식에 입력하며, Git이나 공개 링크에는 넣지 않습니다.
+3. 이 저장소를 Vercel 프로젝트에 연결하고 `.env.example`에 설명된 Vercel 환경 변수들을 설정합니다. `SUPABASE_PUBLISHABLE_KEY`는 설계상 공개 키입니다. 새 API 경로를 배포하기 전에 `SUPABASE_SECRET_KEY`(`sb_secret_…`)를 **서버 전용** Vercel 환경 변수로 설정합니다. 이 값을 브라우저, Git, URL, 채팅에 넣지 마세요. 추출기 토큰은 서버에만 보관합니다. 개발자 테스트 코드는 Vercel에 설정하고 `X-Pinmap-Test-Code` 요청 헤더에만 넣으며, Git이나 공개 링크에는 넣지 않습니다.
 4. Cloud Run의 `GET /health`, `GET /api/map-config`, `GET /api/auth/config`, 인증된 개발자의 `POST /api/place-extract`, 그리고 공개 웹의 동일 출처 재작성 경로를 통한 인증된 `POST`·`GET`·`DELETE` 요청을 `/api/content-save`에서 확인합니다. 두 번째 계정이 첫 번째 계정의 행을 읽을 수 없는지, Supabase에 조작한 분석 결과를 직접 쓸 수 없는지, 개발자 테스트 한도가 적용되는지 확인합니다. 날짜가 일부만 있는 행사와 좌표가 모호한 장소도 검사합니다. 어느 쪽에도 근거 없는 날짜나 지도 핀이 추가되어서는 안 됩니다.
 
 공식 추출 API 요청은 `POST /api/content-extract`입니다. `Authorization: Bearer <Supabase user access token>`, `Content-Type: application/json`, 요청 본문 `{"url":"https://www.instagram.com/p/.../","content_types":["place","event"]}`를 사용합니다. 응답은 기존 `results[0].places`와 `results[0].map_locations`를 유지하고 `results[0].events`와 `results[0].content_kind`를 추가합니다. 각 행사에는 `event_type`(`exhibition`, `pop_up`, `other`), `start_date`, `end_date`, `date_text`, `time_text`, `venue_name`, `address`, `evidence`, `needs_review`, `notes`를 사용합니다. 검토가 필요하다고 표시된 지도 좌표와 행사 날짜는 확인된 사실이 아닌 후보로 취급합니다.
 
 공식 저장 API인 `POST /api/content-save`는 동일한 Bearer 토큰과 요청 본문을 사용하며 `{item, analysis_status, analysis_notes, warnings}`를 반환합니다. `GET /api/content-save?limit=2&offset=0`은 `{items, next_offset}`을 반환합니다. 두 매개변수는 선택 사항이며, 포함된 이미지 데이터가 함수 응답 크기 제한을 넘지 않도록 페이지당 최대 2개 항목을 반환합니다. `DELETE /api/content-save`는 `{"url":"https://www.instagram.com/p/.../"}`를 받아 `{deleted}`를 반환합니다. 분석 오류가 발생하더라도 한도 사용이 확정된 뒤라면 분석 1회를 사용하며, 링크는 검토가 필요한 상태로 저장할 수 있습니다. 데이터베이스에는 원본 동영상, 캡션 전문, OCR 결과 전문을 저장하지 않습니다. 프로필·표지·장소 썸네일에는 각각 명시적인 크기 제한이 있고, 생략된 썸네일은 `warnings`에 표시됩니다. 로그인한 브라우저에는 Supabase 공개 키만 전달됩니다. 백엔드는 저장용 비밀 키를 사용하기 전에 액세스 토큰을 별도로 검증합니다.
 
-이 저장소는 `pinmap-team`에서 공개되어 있으며, 기존 `pinmap-backend` Vercel 프로젝트에 직접 연결되어 있습니다. `main`에 푸시하면 Vercel API와 개발자 테스트 화면이 배포되고, 풀 리퀘스트에는 미리보기 배포가 제공됩니다. GitHub의 `Backend tests` 워크플로가 코드를 검사하지만 Vercel의 기본 Git 배포는 이 워크플로가 통과할 때까지 기다리지 않습니다. 미리보기 환경에 서버 전용 테스트 자격 정보가 있으므로 Vercel 프로젝트의 Git Fork Protection을 활성화된 상태로 유지합니다.
+이 저장소는 `pinmap-team`에서 공개되어 있으며, 기존 `pinmap-backend` Vercel 프로젝트에 직접 연결되어 있습니다. `main`에 푸시하면 Vercel API가 배포되고, 풀 리퀘스트에는 미리보기 배포가 제공됩니다. GitHub의 `Backend tests` 워크플로가 코드를 검사하지만 Vercel의 기본 Git 배포는 이 워크플로가 통과할 때까지 기다리지 않습니다. 미리보기 환경에 서버 전용 테스트 자격 정보가 있으므로 Vercel 프로젝트의 Git Fork Protection을 활성화된 상태로 유지합니다.
 
 Vercel의 Git 배포는 별도의 Cloud Run 추출기를 다시 배포하지 않습니다. `.vercel/`과 로컬 테스트 접근 코드 파일을 Git에 올리지 마세요. 배포에 실패하면 다시 변경하기 전에 Vercel 프로젝트의 배포 로그와 GitHub 테스트 결과를 확인합니다.
 

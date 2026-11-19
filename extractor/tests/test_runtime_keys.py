@@ -32,16 +32,19 @@ class RuntimeKeysTests(unittest.TestCase):
             filename = Path(directory) / 'production-keys.enc.json'
             key = os.urandom(32)
             iv = os.urandom(12)
-            ciphertext = AESGCM(key).encrypt(iv, b'{"GEMINI_API_KEY":"new-test-key"}', None)
+            ciphertext = AESGCM(key).encrypt(iv, b'{"GEMINI_API_KEY":"new-test-key","GOOGLE_MAPS_SERVER_KEY":"not-used"}', None)
             filename.write_text(json.dumps({
                 'version': 1,
+                'keys': {'GEMINI_API_KEY': {'source': 'encrypted', 'environment': 'GEMINI_API_KEY'},
+                         'GOOGLE_MAPS_SERVER_KEY': {'source': 'environment', 'environment': 'GOOGLE_MAPS_SERVER_KEY'}},
                 'iv': base64.b64encode(iv).decode(),
                 'data': base64.b64encode(ciphertext[:-16]).decode(),
                 'tag': base64.b64encode(ciphertext[-16:]).decode()
             }), encoding='utf-8')
             env = {'PINMAP_KEYS_MASTER_KEY': key.hex(), 'PINMAP_KEYS_ENCRYPTED_FILE': str(filename),
-                   'GEMINI_API_KEY': 'old-test-key'}
+                   'GEMINI_API_KEY': 'old-test-key', 'GOOGLE_MAPS_SERVER_KEY': 'environment-test-key'}
             self.assertEqual(get_key('GEMINI_API_KEY', env), 'new-test-key')
+            self.assertEqual(get_key('GOOGLE_MAPS_SERVER_KEY', env), 'environment-test-key')
             with self.assertRaises(Exception):
                 get_key('GEMINI_API_KEY', {**env, 'PINMAP_KEYS_MASTER_KEY': os.urandom(32).hex()})
 

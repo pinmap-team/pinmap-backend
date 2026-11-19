@@ -19,12 +19,26 @@ for (const filename of [source, masterFile]) {
 const master = fs.readFileSync(masterFile, 'utf8').trim();
 if (!/^[0-9a-fA-F]{64}$/.test(master)) throw new Error('Invalid master key file');
 const values = parseEnv(fs.readFileSync(source, 'utf8'));
+const registry = JSON.parse(fs.readFileSync(target, 'utf8'));
+if (registry.version !== 1 || !registry.keys || typeof registry.keys !== 'object') {
+  throw new Error('Invalid production key registry');
+}
+for (const [name, value] of Object.entries(values)) {
+  if (!registry.keys[name]) throw new Error(`Key is not listed in registry: ${name}`);
+  if (!value || ['[SENSITIVE]', '[REDACTED]'].includes(value)) throw new Error(`Key has no usable value: ${name}`);
+  registry.keys[name].source = 'encrypted';
+  if (registry.keys[name].comment.includes('이 파일에 없') || registry.keys[name].comment.includes('환경 변수를 참조')) {
+    registry.keys[name].comment = '값은 암호문에 들어 있습니다. 기존 환경 변수는 복호화 키가 없는 배포의 대체 경로입니다.';
+  }
+}
+for (const [name, entry] of Object.entries(registry.keys)) {
+  if (entry.source === 'encrypted' && !values[name]) throw new Error(`Encrypted key missing from local edit file: ${name}`);
+}
 const iv = crypto.randomBytes(12);
 const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(master, 'hex'), iv);
 const data = Buffer.concat([cipher.update(JSON.stringify(values), 'utf8'), cipher.final()]);
 const sealed = {
-  version: 1,
-  algorithm: 'AES-256-GCM',
+  ...registry,
   iv: iv.toString('base64'),
   tag: cipher.getAuthTag().toString('base64'),
   data: data.toString('base64')

@@ -3,7 +3,7 @@ const {projectUrl, publicKey} = require('./config');
 const {getKey} = require('../../config/keys.cjs');
 const EMAIL = 'pinmap2026@gmail.com';
 function enabled() {
-  return process.env.PINMAP_TEST_LOGIN_ENABLED === 'true' && (process.env.PINMAP_TEST_LOGIN_PASSWORD || '').length >= 8;
+  return process.env.PINMAP_TEST_LOGIN_ENABLED === 'true' && getKey('PINMAP_TEST_LOGIN_PASSWORD').length >= 8;
 }
 async function handler(req, res) {
   res.setHeader('Cache-Control', 'private, no-store');
@@ -13,7 +13,7 @@ async function handler(req, res) {
   const url = projectUrl(process.env.SUPABASE_URL);
   const key = publicKey(getKey('SUPABASE_PUBLISHABLE_KEY'));
   if (!url || !key) return res.status(503).json({error:'테스트 로그인을 준비 중이에요.'});
-  const password = process.env.PINMAP_TEST_LOGIN_PASSWORD;
+  const password = getKey('PINMAP_TEST_LOGIN_PASSWORD');
   async function request(path, body, apiKey = key) {
     const response = await fetch(url + path, {method:'POST', headers:{apikey:apiKey,'Content-Type':'application/json'}, body:JSON.stringify(body), signal:AbortSignal.timeout(10000)});
     return {ok:response.ok, data:await response.json()};

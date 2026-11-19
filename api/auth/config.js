@@ -24,7 +24,7 @@ module.exports = function handler(req, res) {
   const url = projectUrl(process.env.SUPABASE_URL);
   const key = publicKey(getKey('SUPABASE_PUBLISHABLE_KEY'));
   if (!url || !key) return res.status(503).json({error:'로그인 연결을 준비 중이에요. 잠시 후 다시 시도해 주세요.'});
-  res.status(200).json({url, publishableKey:key, ...(process.env.PINMAP_TEST_LOGIN_ENABLED === 'true' && (process.env.PINMAP_TEST_LOGIN_PASSWORD || '').length >= 8 ? {testLoginAvailable:true} : {})});
+  res.status(200).json({url, publishableKey:key, ...(process.env.PINMAP_TEST_LOGIN_ENABLED === 'true' && getKey('PINMAP_TEST_LOGIN_PASSWORD').length >= 8 ? {testLoginAvailable:true} : {})});
 };
 module.exports.projectUrl = projectUrl;
 module.exports.publicKey = publicKey;

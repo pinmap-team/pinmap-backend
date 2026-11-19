@@ -1,87 +1,71 @@
-# Pinmap content extraction backend
+# Pinmap 콘텐츠 추출 백엔드
 
-This repository owns the server-side Pinmap code. The public web UI lives in
-[`pinmap-web-prototype`](https://github.com/pinmap-team/pinmap-web-prototype),
-and the separate mobile app lives in the private `pinmap` repository.
+이 저장소는 핀맵의 서버 측 코드를 관리합니다. 공개 웹 UI는 [`pinmap-web-prototype`](https://github.com/pinmap-team/pinmap-web-prototype)에 있으며, 별도의 모바일 앱은 비공개 `pinmap` 저장소에 있습니다.
 
-**[Open the online extraction test](https://pinmap-backend.vercel.app/)** —
-paste an Instagram post or reel URL and enter the test code to inspect extracted
-places, event schedules, map coordinates, review notes, and the raw server response.
-After analysis, **핀맵 지도에서 보기** opens the official prototype in a new tab
-and transfers the existing report to its development map. The test code stays
-in the backend test tab and is never included in the link or transfer message.
-The map button appears only when the report contains places; an empty result
-still shows its server notes and raw response in the test screen.
+**[온라인 추출 테스트 열기](https://pinmap-backend.vercel.app/)** — 인스타그램 게시물 또는 릴스 URL과 테스트 코드를 입력하면 추출된 장소, 행사 일정, 지도 좌표, 검토 메모, 서버 원본 응답을 확인할 수 있습니다. 분석 후 **핀맵 지도에서 보기**를 누르면 공식 프로토타입이 새 탭으로 열리고 기존 분석 결과가 개발용 지도로 전달됩니다. 테스트 코드는 백엔드 테스트 탭에만 남으며 링크나 전달 메시지에는 포함되지 않습니다. 지도 버튼은 결과에 장소가 있을 때만 표시됩니다. 결과가 비어 있어도 테스트 화면에서 서버 메모와 원본 응답을 확인할 수 있습니다.
 
-## Modules
+## 모듈
 
-| Directory | Deployment | Purpose |
+| 디렉터리 | 배포 위치 | 역할 |
 | --- | --- | --- |
-| `api/` | Vercel | Keep the developer test route, provide authenticated content extraction and account-backed save/list/delete routes, and return browser-safe map and Supabase configuration. |
-| `extractor/` | Google Cloud Run | Fetch public Instagram media, analyze captions and frames, extract places and event dates separately, and search map candidates. |
-| `test-ui/` | Vercel static files | Developer test screen with request status, places, event schedules, failures, and raw response. |
-| `packages/multiuser/` | Separate opt-in Node service; excluded from Vercel | Account-isolated ZIP/media imports, persistent jobs, and audio/visual analysis retained from the earlier local backend. It is not connected to the public Pinmap UI. |
-| `database/` | Apply to the official Supabase project | Atomic daily extraction quotas and per-account saved-content storage with server-only write permissions. |
-| `tests/`, `extractor/tests/` | CI/local | API boundary, place-search, OCR, and event parsing checks. |
+| `api/` | Vercel | 개발자 테스트 경로, 인증이 필요한 콘텐츠 추출과 계정별 저장·목록·삭제 API를 제공하고, 브라우저에 공개해도 되는 지도 및 Supabase 설정을 반환합니다. |
+| `extractor/` | Google Cloud Run | 공개 인스타그램 미디어를 가져와 캡션과 이미지 프레임을 분석하고, 장소와 행사 날짜를 각각 추출하며 지도 검색 후보를 찾습니다. |
+| `test-ui/` | Vercel 정적 파일 | 요청 상태, 장소, 행사 일정, 실패 원인, 원본 응답을 보여주는 개발자 테스트 화면입니다. |
+| `packages/multiuser/` | 별도로 선택해 실행하는 Node 서비스. Vercel 배포에서는 제외 | 이전 로컬 백엔드에서 가져온 계정별 ZIP·미디어 가져오기, 영속 작업, 오디오·시각 분석 기능입니다. 공개 핀맵 UI에는 연결되지 않습니다. |
+| `database/` | 공식 Supabase 프로젝트에 적용 | 하루 단위 추출 횟수를 원자적으로 제한하고 계정별 저장 콘텐츠를 관리합니다. 쓰기 작업은 서버에서만 허용합니다. |
+| `tests/`, `extractor/tests/` | CI·로컬 | API 경계, 장소 검색, OCR, 행사 일정 파싱을 검사합니다. |
 
-## Request flow
+## 요청 흐름
 
-1. The developer test screen sends an Instagram post/reel URL, the test code, and `content_types: ["place", "event"]` to `POST /api/place-extract`. A shared server-side quota permits at most 20 developer analyses per Seoul calendar day. Existing callers that omit `content_types` retain place-only behavior.
-2. The official route `POST /api/content-save` requires a Supabase user access token, checks the storage table, and claims one of five daily analysis attempts per user in Supabase before contacting Cloud Run. It defaults to both content types. `POST /api/content-extract` remains an authenticated extraction-only route with the same quota.
-3. Vercel validates the URL and forwards the request to Cloud Run `/extract-link` using a server-only token. Cloud Run returns `places` and `map_locations` for map pins, plus independent `events` with dates, time text, venue, evidence, and review flags. Missing years or uncertain dates remain unstructured text for review.
-4. The official save route stores a bounded, allowlisted report in the signed-in user's Supabase row using a server-only secret key. Browsers cannot write analysis fields directly to the database. `GET /api/content-save` restores saved items and `DELETE /api/content-save` removes an item. A failed analysis can save the link with `content_kind: "unknown"`; it does not replace an earlier successful report for the same link. The developer test screen can transfer a place report to the prototype map, but its test-code route does not persist results. The separate multiuser service has its own storage and authentication model.
+1. 개발자 테스트 화면은 인스타그램 게시물·릴스 URL, 테스트 코드, `content_types: ["place", "event"]`를 `POST /api/place-extract`에 보냅니다. 서버에서 공유하는 제한에 따라 서울 날짜 기준 하루 최대 20회의 개발자 분석을 허용합니다. `content_types`를 생략하는 기존 호출은 장소만 분석합니다.
+2. 공식 `POST /api/content-save` 경로는 Supabase 사용자 액세스 토큰을 요구합니다. 저장 테이블을 확인한 뒤 Cloud Run에 요청하기 전에 Supabase에서 사용자별 하루 5회 분석 한도 중 1회를 사용합니다. 기본적으로 장소와 행사 두 종류를 모두 분석합니다. `POST /api/content-extract`는 같은 한도를 적용하는 인증된 추출 전용 경로로 유지됩니다.
+3. Vercel은 URL을 검증하고 서버 전용 토큰을 사용해 Cloud Run의 `/extract-link`로 요청을 전달합니다. Cloud Run은 지도 핀에 사용할 `places`와 `map_locations`를 반환합니다. 날짜, 시간 문구, 장소, 근거, 검토 필요 여부가 포함된 `events`도 별도로 반환합니다. 연도가 없거나 날짜가 불확실하면 검토할 수 있도록 구조화하지 않은 원문으로 남깁니다.
+4. 공식 저장 경로는 서버 전용 비밀 키를 사용해, 허용된 필드와 크기로 제한한 분석 결과를 로그인한 사용자의 Supabase 행에 저장합니다. 브라우저는 분석 필드를 데이터베이스에 직접 쓸 수 없습니다. `GET /api/content-save`는 저장 항목을 불러오고 `DELETE /api/content-save`는 항목을 삭제합니다. 분석에 실패한 링크도 `content_kind: "unknown"`으로 저장할 수 있지만, 같은 링크의 이전 성공 결과를 덮어쓰지는 않습니다. 개발자 테스트 화면은 장소 결과를 프로토타입 지도로 전달할 수 있으나, 테스트 코드로 호출하는 경로는 결과를 영구 저장하지 않습니다. 별도의 다중 사용자 서비스는 자체 저장소와 인증 방식을 사용합니다.
 
-## Instagram collection strategy
+## 인스타그램 수집 방식
 
-The Cloud Run extractor first uses Scrapling HTTP requests to parse the requested public photo post and downloads its full photo set with up to six concurrent transfers. Only matching post IDs, supported image-only media, and complete photo sets are accepted. Caption and media calls share a cache inside the same temporary request directory; results and browser sessions are never shared across users.
+Cloud Run 추출기는 먼저 Scrapling HTTP 요청으로 지정된 공개 사진 게시물을 해석하고, 최대 6개의 동시 전송으로 전체 사진을 다운로드합니다. 게시물 ID가 일치하고, 지원하는 이미지 전용 미디어이며, 사진 세트가 완전한 경우만 결과를 받아들입니다. 캡션과 미디어 요청은 같은 임시 요청 디렉터리 안에서 캐시를 공유합니다. 결과와 브라우저 세션은 사용자 간에 공유하지 않습니다.
 
-Unavailable public data, login restrictions, changed page structure, incomplete photos, unsupported/video posts, dependency errors, or image download failures automatically use the existing browser collector. Image downloads allow only HTTPS Instagram CDN hosts, validate file signatures, and retain the existing per-image and total size limits. Profile images are optional with a short timeout. The HTTP image target is 1080px for OCR; OCR, AI, map search, and saved-content behavior are unchanged.
+공개 데이터를 사용할 수 없거나, 로그인 제한·페이지 구조 변경·사진 누락·지원하지 않는 게시물 또는 동영상 게시물·의존성 오류·이미지 다운로드 실패가 발생하면 기존 브라우저 수집기로 자동 전환합니다. 이미지 다운로드는 HTTPS 인스타그램 CDN 호스트만 허용하고 파일 형식을 확인하며, 기존의 이미지별·전체 크기 제한을 유지합니다. 프로필 이미지는 선택 사항이며 짧은 제한 시간을 적용합니다. HTTP 방식의 OCR 대상 이미지는 1080px입니다. OCR, AI, 지도 검색, 콘텐츠 저장 동작은 변경되지 않습니다.
 
-Structured Cloud Run stderr records `stage=collection`, `method=scrapling_http` or `browser_fallback`, duration, and a bounded fallback category. It excludes captions, tokens, and signed image URLs. Set `PINMAP_SCRAPLING_ENABLED=0` on Cloud Run to use only the previous browser path. The pinned Scrapling dependency runs in the image's Python virtual environment. Vercel deployment alone does not enable this code; deploy `extractor/` to Cloud Run as well.
+구조화된 Cloud Run 표준 오류 로그에는 `stage=collection`, 수집 방식인 `method=scrapling_http` 또는 `browser_fallback`, 소요 시간, 제한된 범위의 대체 경로 전환 사유가 기록됩니다. 캡션, 토큰, 서명된 이미지 URL은 기록하지 않습니다. Cloud Run에서 `PINMAP_SCRAPLING_ENABLED=0`으로 설정하면 이전 브라우저 방식만 사용합니다. 버전을 고정한 Scrapling 의존성은 컨테이너 이미지의 Python 가상 환경에서 실행됩니다. Vercel만 배포해서는 이 코드가 활성화되지 않으므로 `extractor/`도 Cloud Run에 배포해야 합니다.
 
-## Setup and deployment
+## 설정과 배포
 
-1. Apply [`database/001_content_extraction_quota.sql`](database/001_content_extraction_quota.sql), [`database/002_saved_content.sql`](database/002_saved_content.sql), then [`database/003_developer_test_quota.sql`](database/003_developer_test_quota.sql) to the same Supabase project named by `SUPABASE_URL`. Record each applied migration; these files are intended to run once, in order. Until the required functions and table are available, the routes return `503` without contacting the extractor. The saved-content table has a 100-item account limit. Only the backend can write analysis rows; authenticated users may read only their own rows through the backend.
-2. Deploy `extractor/` to Cloud Run from its Dockerfile. Set `PINMAP_TEST_TOKEN` to the same server-only value as Vercel's `PINMAP_EXTRACTOR_TOKEN`. Supply the AI and map provider keys in Cloud Run, not Git. Deploy and verify the Cloud Run revision separately; Vercel's Git deployment does not update it.
-3. Link this repository to the Vercel project and set the Vercel values described in `.env.example`. `SUPABASE_PUBLISHABLE_KEY` is public by design. Set `SUPABASE_SECRET_KEY` (`sb_secret_…`) as a **server-only** Vercel environment variable before deploying the new routes; never put it in the browser, Git, a URL, or a chat. Keep the extractor token only on servers; configure the developer test code in Vercel and enter it in the test form, never in Git or a public link.
-4. Verify `GET /health` on Cloud Run, `GET /api/map-config`, `GET /api/auth/config`, an authorized developer `POST /api/place-extract`, and authenticated `POST`, `GET`, and `DELETE` requests to `/api/content-save` through the public web's same-origin rewrites. Confirm that a second account cannot read the first account's rows, cannot write a forged analysis record directly to Supabase, and that the developer test quota is enforced. Check an event with a partial date and a place with ambiguous coordinates; neither should gain an invented date or pin.
+1. `SUPABASE_URL`이 가리키는 동일한 Supabase 프로젝트에 [`database/001_content_extraction_quota.sql`](database/001_content_extraction_quota.sql), [`database/002_saved_content.sql`](database/002_saved_content.sql), [`database/003_developer_test_quota.sql`](database/003_developer_test_quota.sql)을 순서대로 적용합니다. 각 변경의 적용 여부를 기록하세요. 이 파일들은 순서대로 한 번씩 실행하도록 작성되었습니다. 필요한 함수와 테이블이 없으면 API는 추출기에 요청하지 않고 `503`을 반환합니다. 저장 콘텐츠는 계정당 100개로 제한됩니다. 분석 결과 행은 백엔드만 쓸 수 있으며, 인증된 사용자는 백엔드를 통해 자신의 행만 읽을 수 있습니다.
+2. `extractor/`의 Dockerfile을 사용해 Cloud Run에 배포합니다. `PINMAP_TEST_TOKEN`에는 Vercel의 `PINMAP_EXTRACTOR_TOKEN`과 동일한 서버 전용 값을 설정합니다. AI 키와 지도 제공자 키는 Git이 아닌 Cloud Run에 설정합니다. Cloud Run 배포 버전은 별도로 배포하고 확인해야 합니다. Vercel의 Git 배포는 Cloud Run을 업데이트하지 않습니다.
+3. 이 저장소를 Vercel 프로젝트에 연결하고 `.env.example`에 설명된 Vercel 환경 변수들을 설정합니다. `SUPABASE_PUBLISHABLE_KEY`는 설계상 공개 키입니다. 새 API 경로를 배포하기 전에 `SUPABASE_SECRET_KEY`(`sb_secret_…`)를 **서버 전용** Vercel 환경 변수로 설정합니다. 이 값을 브라우저, Git, URL, 채팅에 넣지 마세요. 추출기 토큰은 서버에만 보관합니다. 개발자 테스트 코드는 Vercel에 설정하고 테스트 양식에 입력하며, Git이나 공개 링크에는 넣지 않습니다.
+4. Cloud Run의 `GET /health`, `GET /api/map-config`, `GET /api/auth/config`, 인증된 개발자의 `POST /api/place-extract`, 그리고 공개 웹의 동일 출처 재작성 경로를 통한 인증된 `POST`·`GET`·`DELETE` 요청을 `/api/content-save`에서 확인합니다. 두 번째 계정이 첫 번째 계정의 행을 읽을 수 없는지, Supabase에 조작한 분석 결과를 직접 쓸 수 없는지, 개발자 테스트 한도가 적용되는지 확인합니다. 날짜가 일부만 있는 행사와 좌표가 모호한 장소도 검사합니다. 어느 쪽에도 근거 없는 날짜나 지도 핀이 추가되어서는 안 됩니다.
 
-Official API request: `POST /api/content-extract` with `Authorization: Bearer <Supabase user access token>`, `Content-Type: application/json`, and body `{"url":"https://www.instagram.com/p/.../","content_types":["place","event"]}`. The response keeps `results[0].places` and `results[0].map_locations` and adds `results[0].events` and `results[0].content_kind`. Use `event_type` (`exhibition`, `pop_up`, `other`), `start_date`, `end_date`, `date_text`, `time_text`, `venue_name`, `address`, `evidence`, `needs_review`, and `notes` on each event. Treat map coordinates and event dates marked for review as candidates, not verified facts.
+공식 추출 API 요청은 `POST /api/content-extract`입니다. `Authorization: Bearer <Supabase user access token>`, `Content-Type: application/json`, 요청 본문 `{"url":"https://www.instagram.com/p/.../","content_types":["place","event"]}`를 사용합니다. 응답은 기존 `results[0].places`와 `results[0].map_locations`를 유지하고 `results[0].events`와 `results[0].content_kind`를 추가합니다. 각 행사에는 `event_type`(`exhibition`, `pop_up`, `other`), `start_date`, `end_date`, `date_text`, `time_text`, `venue_name`, `address`, `evidence`, `needs_review`, `notes`를 사용합니다. 검토가 필요하다고 표시된 지도 좌표와 행사 날짜는 확인된 사실이 아닌 후보로 취급합니다.
 
-Official save API: `POST /api/content-save` uses the same bearer token and request body and returns `{item, analysis_status, analysis_notes, warnings}`. `GET /api/content-save?limit=2&offset=0` returns `{items, next_offset}`; both parameters are optional, and each page contains at most two items so embedded image data stays below the function response limit. `DELETE /api/content-save` takes `{"url":"https://www.instagram.com/p/.../"}` and returns `{deleted}`. Extraction errors consume an attempt after the quota claim, and the link can still be saved with a review status. The database stores neither the original video nor full captions or OCR output. Profile, cover, and place thumbnails have explicit size limits; an omitted thumbnail appears in `warnings`. A signed-in browser receives only the public Supabase key; the backend independently verifies its access token before using the secret key for storage.
+공식 저장 API인 `POST /api/content-save`는 동일한 Bearer 토큰과 요청 본문을 사용하며 `{item, analysis_status, analysis_notes, warnings}`를 반환합니다. `GET /api/content-save?limit=2&offset=0`은 `{items, next_offset}`을 반환합니다. 두 매개변수는 선택 사항이며, 포함된 이미지 데이터가 함수 응답 크기 제한을 넘지 않도록 페이지당 최대 2개 항목을 반환합니다. `DELETE /api/content-save`는 `{"url":"https://www.instagram.com/p/.../"}`를 받아 `{deleted}`를 반환합니다. 분석 오류가 발생하더라도 한도 사용이 확정된 뒤라면 분석 1회를 사용하며, 링크는 검토가 필요한 상태로 저장할 수 있습니다. 데이터베이스에는 원본 동영상, 캡션 전문, OCR 결과 전문을 저장하지 않습니다. 프로필·표지·장소 썸네일에는 각각 명시적인 크기 제한이 있고, 생략된 썸네일은 `warnings`에 표시됩니다. 로그인한 브라우저에는 Supabase 공개 키만 전달됩니다. 백엔드는 저장용 비밀 키를 사용하기 전에 액세스 토큰을 별도로 검증합니다.
 
-This repository is public under `pinmap-team` and is directly connected to the existing `pinmap-backend` Vercel project. A push to `main` deploys the Vercel API and development test screen; pull requests receive preview deployments. The `Backend tests` GitHub workflow checks code, but Vercel's native Git deployment does not wait for that workflow to pass. Keep the Vercel project's Git Fork Protection enabled because preview environments contain server-only test credentials.
+이 저장소는 `pinmap-team`에서 공개되어 있으며, 기존 `pinmap-backend` Vercel 프로젝트에 직접 연결되어 있습니다. `main`에 푸시하면 Vercel API와 개발자 테스트 화면이 배포되고, 풀 리퀘스트에는 미리보기 배포가 제공됩니다. GitHub의 `Backend tests` 워크플로가 코드를 검사하지만 Vercel의 기본 Git 배포는 이 워크플로가 통과할 때까지 기다리지 않습니다. 미리보기 환경에 서버 전용 테스트 자격 정보가 있으므로 Vercel 프로젝트의 Git Fork Protection을 활성화된 상태로 유지합니다.
 
-Vercel Git deployment does not redeploy the separate Cloud Run extractor. Keep `.vercel/` and local test access code files out of Git. If deployment fails, inspect the project's Vercel deployment logs and the GitHub test result before making another change.
+Vercel의 Git 배포는 별도의 Cloud Run 추출기를 다시 배포하지 않습니다. `.vercel/`과 로컬 테스트 접근 코드 파일을 Git에 올리지 마세요. 배포에 실패하면 다시 변경하기 전에 Vercel 프로젝트의 배포 로그와 GitHub 테스트 결과를 확인합니다.
 
-The earlier local AI backend is kept under `packages/multiuser/` as a separate
-service. Its own API, SQLite store, and worker do not share the Vercel routes or
-the official site's authentication. `.vercelignore` keeps this source out of
-the Vercel deployment; the CI workflow runs its tests separately. See the
-package README before running it. Public Instagram links and map candidate
-resolution use this repository's Cloud Run extractor rather than a second
-local copy of that pipeline. No historical user export or local database is
-included in the package.
+이전 로컬 AI 백엔드는 `packages/multiuser/`에 별도 서비스로 보관되어 있습니다. 자체 API, SQLite 저장소, 작업자는 Vercel API 경로나 공식 사이트의 인증 체계를 공유하지 않습니다. `.vercelignore`는 이 소스가 Vercel에 배포되지 않도록 제외하며, CI 워크플로는 해당 서비스의 테스트를 별도로 실행합니다. 실행 방법은 패키지 README를 참고하세요. 공개 인스타그램 링크와 지도 후보 검색에는 같은 처리 흐름의 로컬 복사본 대신 이 저장소의 Cloud Run 추출기를 사용합니다. 이전 사용자 내보내기 자료나 로컬 데이터베이스는 이 패키지에 포함되지 않습니다.
 
-No credentials, browser profiles, collected media, or generated results belong in Git. `.env.example` contains names only. Tests do not make paid AI or Places API requests.
+인증 정보, 브라우저 프로필, 수집한 미디어, 생성된 결과물을 Git에 넣지 않습니다. `.env.example`에는 환경 변수 이름만 있습니다. 테스트에서는 유료 AI 또는 Places API를 호출하지 않습니다.
 
-Run `npm test` to check the API and Python lookup logic. Cloud Run's `GET /health` verifies that its process is running; it does not guarantee Instagram access or upstream AI availability.
+`npm test`를 실행하면 API와 Python 검색 로직을 검사합니다. Cloud Run의 `GET /health`는 프로세스가 실행 중인지 확인하지만, 인스타그램 접근이나 외부 AI 서비스 이용 가능 여부까지 보장하지는 않습니다.
 
-## Saved-place photo fallback
+## 저장된 장소의 사진 대체 방식
 
-`POST /api/content-photo` accepts only a saved content UUID and a location index, verifies the Supabase user, and reads that user's saved location. Existing post thumbnails take priority. Missing thumbnails use fresh Google Places photos matched by normalized name and coordinates within 150m. Store only `google_place_id` inside `map_locations`; never persist a Google photo name, URI or image bytes. Each displayed Google photo carries its author attribution and Google Maps source link.
+`POST /api/content-photo`는 저장된 콘텐츠의 UUID와 장소 인덱스만 받습니다. Supabase 사용자를 검증하고 해당 사용자가 저장한 장소를 읽습니다. 기존 게시물 썸네일을 우선 사용합니다. 썸네일이 없으면 정규화한 장소 이름과 반경 150m 이내 좌표를 기준으로 새 Google Places 사진을 찾습니다. `map_locations`에는 `google_place_id`만 저장하고 Google 사진 이름, URI, 이미지 바이트는 저장하지 않습니다. 화면에 표시하는 각 Google 사진에는 작성자 표시와 Google 지도 원본 링크를 함께 제공합니다.
 
-`GOOGLE_MAPS_SERVER_KEY` is server-only. The token-protected maintenance endpoint `POST /api/photo-backfill` fills missing place IDs in existing saved locations six at a time. It accepts no arbitrary database changes and returns only counts/cursors. It leaves original thumbnails, account ownership, source URLs and saved timestamps intact; changed content is skipped using its original update timestamp. Provider failures stop the batch for retry. The maintenance token is `PINMAP_EXTRACTOR_TOKEN` and must never enter browser code.
+`GOOGLE_MAPS_SERVER_KEY`는 서버 전용입니다. 토큰으로 보호되는 관리용 `POST /api/photo-backfill`은 기존에 저장된 장소의 누락된 장소 ID를 한 번에 최대 6개씩 채웁니다. 임의의 데이터베이스 변경 요청은 받지 않으며 건수와 커서만 반환합니다. 원본 썸네일, 계정 소유권, 출처 URL, 저장 시각은 그대로 두고, 최초 업데이트 시각을 확인해 그사이 변경된 콘텐츠는 건너뜁니다. 지도 제공자 요청에 실패하면 재시도를 위해 해당 묶음 작업을 멈춥니다. 관리용 토큰은 `PINMAP_EXTRACTOR_TOKEN`이며 브라우저 코드에 들어가서는 안 됩니다.
 
-## Analysis performance
+## 분석 성능
 
-The extractor removes exact duplicate still images before OCR (preferring slide evidence to a duplicate cover), while preserving separate video timestamps. The first OCR result is reused for place-photo matching, including empty/failed OCR results, rather than running Tesseract across the slides again. The 1-vCPU image sets `OMP_THREAD_LIMIT=1` to avoid CPU oversubscription.
+추출기는 OCR 전에 완전히 동일한 정지 이미지를 제거합니다. 표지와 슬라이드가 중복되면 슬라이드의 근거를 우선하며, 동영상의 서로 다른 시점은 유지합니다. 첫 OCR 결과는 빈 결과나 실패 결과를 포함해 장소 사진 매칭에도 재사용하므로 슬라이드 전체에 Tesseract를 다시 실행하지 않습니다. 1-vCPU 이미지에서는 `OMP_THREAD_LIMIT=1`을 설정해 CPU 자원 경쟁을 줄입니다.
 
-One structured model response supplies missing place/event candidates plus the title and summary. The existing source-file, date-grounding and review validators are shared with the previous paths. Already complete deterministic event candidates are retained; summary-only calls send no images. Invalid or incomplete unified responses fall back to the previous analysis functions. Set `PINMAP_UNIFIED_ANALYSIS=0` for the old AI-call path.
+하나의 구조화된 모델 응답으로 누락된 장소·행사 후보와 제목·요약을 받습니다. 기존의 원본 파일 확인, 날짜 근거 확인, 검토 필요 여부 검사 로직은 이전 경로와 공유합니다. 규칙 기반으로 이미 완성된 행사 후보는 유지하며, 요약만 필요한 요청에는 이미지를 보내지 않습니다. 통합 응답이 유효하지 않거나 불완전하면 이전 분석 함수로 돌아갑니다. 이전 AI 호출 방식을 사용하려면 `PINMAP_UNIFIED_ANALYSIS=0`으로 설정합니다.
 
-Google/Naver place searches run with at most four concurrent requests and each unique name/area/keyword tuple is queried once per post. Candidate ranking, result order and review flags remain deterministic. Public fallback geocoding stays sequential and repeated identical addresses are reused. `PINMAP_MAP_LOOKUP_WORKERS=1` restores sequential searches.
+Google·Naver 장소 검색은 최대 4개 요청을 동시에 실행합니다. 게시물 하나에서 동일한 장소 이름·지역·검색어 조합은 한 번만 조회합니다. 후보 순위, 결과 순서, 검토 필요 여부는 동일한 입력에 대해 같은 결과가 나오도록 유지합니다. 공개 지오코딩 대체 경로는 순차적으로 실행하고, 같은 주소가 반복되면 이전 결과를 재사용합니다. `PINMAP_MAP_LOOKUP_WORKERS=1`로 설정하면 장소 검색을 순차 실행으로 되돌립니다.
 
-Structured `analysis_timing` logs and the extraction response's `analysis_metrics` report collection, preparation, OCR, AI, map search and image matching time, OCR image counts and the selected AI strategy. OCR source text is not duplicated in metrics or written to timing logs. Vercel's saved-content schema does not persist these diagnostics. Deploy and benchmark the Cloud Run image separately from Vercel.
+구조화된 `analysis_timing` 로그와 추출 응답의 `analysis_metrics`에는 수집, 준비, OCR, AI, 지도 검색, 이미지 매칭 시간과 OCR 이미지 수, 선택된 AI 분석 방식이 포함됩니다. OCR 원문은 성능 지표에 중복해서 넣거나 시간 로그에 기록하지 않습니다. Vercel의 저장 콘텐츠 스키마에도 이 진단 정보는 저장되지 않습니다. Cloud Run 이미지는 Vercel과 별도로 배포하고 성능을 측정합니다.
 
 ### 팀 테스트 계정 로그인
 

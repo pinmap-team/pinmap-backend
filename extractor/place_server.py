@@ -457,7 +457,8 @@ def resolve_missing_addresses(places, caption='', max_workers=None):
         candidate_type = str(ranked[0].get('type') or '').lower() if ranked else ''
         business_ok = all(not candidate_type or any(word in candidate_type for word in words)
                           for keyword, words in business_groups.items() if keyword in (place.get('search_keyword') or ''))
-        unique_exact = (len(ranked) == 1 and not lookup.get('has_more') and business_ok and
+        unique_exact = (len(ranked) == 1 and ranked[0]['score'] >= .65 and
+                        not lookup.get('has_more') and not lookup.get('name_only_fallback') and business_ok and
                         normalized_place_name(ranked[0].get('name')) == normalized_place_name(place.get('name')) and
                         (not hint or hint in normalized_place_name(ranked[0].get('address'))))
         address_ok = not place.get('address') or (ranked and compatible_place_addresses(place['address'], ranked[0].get('address')))

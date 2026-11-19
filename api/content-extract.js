@@ -1,9 +1,10 @@
 const { projectUrl, publicKey } = require('./auth/config');
+const { getKey } = require('../config/keys.cjs');
 const { extractionRequest, extractorConfig, forwardExtraction } = require('./place-extract');
 
 function supabaseConfig(env = process.env) {
   const origin = projectUrl(env.SUPABASE_URL);
-  const key = publicKey(env.SUPABASE_PUBLISHABLE_KEY);
+  const key = publicKey(getKey('SUPABASE_PUBLISHABLE_KEY', env));
   return origin && key ? { origin, key } : null;
 }
 

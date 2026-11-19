@@ -1,10 +1,13 @@
 import {AppError} from '../lib/errors.mjs';
+import keyStore from '../../../config/keys.cjs';
+
+const {getKey} = keyStore;
 
 const MAX_RESPONSE_BYTES = 12 * 1024 * 1024;
 
 function extractorUrl(pathname, env) {
   const origin = String(env.PINMAP_EXTRACTOR_ORIGIN || '').trim();
-  const token = String(env.PINMAP_EXTRACTOR_TOKEN || '').trim();
+  const token = getKey('PINMAP_EXTRACTOR_TOKEN',env);
   let url;
   try { url = new URL(origin); } catch { /* Checked below. */ }
   const loopback = url && url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);

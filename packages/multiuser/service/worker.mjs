@@ -14,11 +14,14 @@ import {collectPublicLink,resolveMapLocations} from './extractor-client.mjs';
 import {GeminiClient} from './gemini-client.mjs';
 import {saveDesktopCover} from './desktop-cover.mjs';
 import {transcriberFromEnv} from './transcription.mjs';
+import keyStore from '../../../config/keys.cjs';
+
+const {getKey} = keyStore;
 
 export function providerFromEnv(settings,env=process.env){
   if(settings.providerName==='ollama')return new OllamaClient({settings,baseUrl:env.OLLAMA_BASE_URL||'http://127.0.0.1:11434'});
-  if(settings.providerName==='vllm')return new VllmClient({baseUrl:env.VLLM_BASE_URL,model:settings.model,apiKey:env.VLLM_API_KEY});
-  if(settings.providerName==='gemini')return new GeminiClient({apiKey:env.GEMINI_API_KEY,model:settings.model});
+  if(settings.providerName==='vllm')return new VllmClient({baseUrl:env.VLLM_BASE_URL,model:settings.model,apiKey:getKey('VLLM_API_KEY',env)});
+  if(settings.providerName==='gemini')return new GeminiClient({apiKey:getKey('GEMINI_API_KEY',env),model:settings.model});
   throw new Error('MULTIUSER_AI_PROVIDER must be ollama, vllm, or gemini');
 }
 export function desktopPlaceResult(report){

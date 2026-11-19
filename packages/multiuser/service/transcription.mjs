@@ -4,8 +4,10 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {AppError} from '../lib/errors.mjs';
 import {runFfmpeg} from '../lib/media.mjs';
+import keyStore from '../../../config/keys.cjs';
 
 const exec=promisify(execFile);
+const {getKey}=keyStore;
 export function normalizeTranscription(body){
   const segments=(body.segments||body.transcription||[]).map(s=>({
     start_seconds:Number.isFinite(s.start)?s.start:Number.isFinite(s.offsets?.from)?s.offsets.from/1000:null,
@@ -39,7 +41,7 @@ export function transcriberFromEnv(env=process.env,fetchImpl=fetch){
     const base=url.href.replace(/\/?$/,'/');const endpoint=new URL('audio/transcriptions',base+(url.pathname.replace(/\/$/,'').endsWith('/v1')?'':'v1/'));
     return{async transcribe(audio){
       const form=new FormData();form.append('model',env.ASR_MODEL);form.append('response_format','verbose_json');form.append('file',new Blob([await fs.readFile(audio.path)],{type:audio.mime}),path.basename(audio.path));
-      let response;try{response=await fetchImpl(endpoint,{method:'POST',headers:env.ASR_API_KEY?{Authorization:`Bearer ${env.ASR_API_KEY}`}:{},body:form,redirect:'error',signal:AbortSignal.timeout(30*60*1000)});}catch{throw new AppError('음성 전사 서버와 연결이 끊겼습니다.',{code:'asr_unavailable',status:502});}
+      let response;try{const apiKey=getKey('ASR_API_KEY',env);response=await fetchImpl(endpoint,{method:'POST',headers:apiKey?{Authorization:`Bearer ${apiKey}`}:{},body:form,redirect:'error',signal:AbortSignal.timeout(30*60*1000)});}catch{throw new AppError('음성 전사 서버와 연결이 끊겼습니다.',{code:'asr_unavailable',status:502});}
       if(!response.ok)throw new AppError('음성 전사 요청이 실패했습니다.',{code:'asr_error',status:response.status});
       let body;try{body=await response.json();}catch{throw new AppError('음성 전사 응답을 읽지 못했습니다.',{code:'invalid_asr_response',status:502});}
       return{...normalizeTranscription(body),model:env.ASR_MODEL};

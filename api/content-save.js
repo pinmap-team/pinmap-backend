@@ -1,4 +1,5 @@
 const { extractionRequest, extractorConfig, forwardExtraction, instagramLink } = require('./place-extract');
+const { getKey } = require('../config/keys.cjs');
 const { supabaseConfig, bearerToken, authenticatedUser } = require('./content-extract');
 
 const MAX_REQUEST_BYTES = 4096;
@@ -13,7 +14,7 @@ const SELECT = 'id,user_id,source_url,content_kind,classification,status,ai_titl
 // The public key verifies the caller. Only this
 // server holds the separate secret key used to write trusted analysis records.
 function storageConfig(publicConfig, env = process.env) {
-  const secret = String(env.SUPABASE_SECRET_KEY || '').trim();
+  const secret = getKey('SUPABASE_SECRET_KEY', env);
   return publicConfig && /^sb_secret_[A-Za-z0-9_-]{8,}$/.test(secret)
     ? { origin: publicConfig.origin, secret } : null;
 }
@@ -31,7 +32,7 @@ function safeNote(value) {
   let text = value.trim();
   for (const name of ['PINMAP_EXTRACTOR_TOKEN', 'OPENAI_API_KEY', 'GEMINI_API_KEY',
     'GOOGLE_PLACES_API_KEY', 'GOOGLE_MAPS_API_KEY']) {
-    const secret = process.env[name];
+    const secret = getKey(name);
     if (secret && secret.length >= 8) text = text.split(secret).join('[redacted]');
   }
   return text.replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|AIza[A-Za-z0-9_-]{20,}|sb_secret_[A-Za-z0-9_-]{8,})\b/g,

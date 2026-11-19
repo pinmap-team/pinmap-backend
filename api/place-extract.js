@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { getKey } = require('../config/keys.cjs');
 
 const MAX_EXTRACTOR_RESPONSE_BYTES = 12 * 1024 * 1024;
 
@@ -34,7 +35,7 @@ function extractionRequest(body, defaults = ['place']) {
 }
 
 function extractorConfig(env = process.env) {
-  const token = env.PINMAP_EXTRACTOR_TOKEN;
+  const token = getKey('PINMAP_EXTRACTOR_TOKEN', env);
   let target;
   try { target = new URL(env.PINMAP_EXTRACTOR_ORIGIN); } catch { return null; }
   if (!token || target.protocol !== 'https:' || target.username || target.password ||
@@ -87,10 +88,10 @@ module.exports = async function placeExtract(req, res) {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'method_not_allowed' });
   }
-  if (!extractorConfig() || !process.env.PINMAP_TEST_ACCESS_CODE) {
+  if (!extractorConfig() || !getKey('PINMAP_TEST_ACCESS_CODE')) {
     return res.status(503).json({ error: 'online_test_not_configured' });
   }
-  if (!equalSecret(req.headers['x-pinmap-test-code'], process.env.PINMAP_TEST_ACCESS_CODE)) {
+  if (!equalSecret(req.headers['x-pinmap-test-code'], getKey('PINMAP_TEST_ACCESS_CODE'))) {
     return res.status(401).json({ error: 'unauthorized' });
   }
   let payload;

@@ -40,8 +40,12 @@ def settings_with_keys(environ=None):
     if payload.get('version') != 1 or not isinstance(payload.get('keys'), dict):
         raise ValueError('Invalid production key registry')
     for name, entry in payload['keys'].items():
-        if entry.get('source') not in ('encrypted', 'environment') or not entry.get('environment'):
+        if entry.get('source') not in ('encrypted', 'environment', 'external'):
             raise ValueError(f'Invalid production key entry: {name}')
+        if entry['source'] == 'external':
+            continue
+        if not entry.get('environment'):
+            raise ValueError(f'Missing environment reference: {name}')
         if entry['source'] == 'environment' and name not in local:
             settings[name] = environ.get(entry['environment'], '')
     master = environ.get('PINMAP_KEYS_MASTER_KEY')

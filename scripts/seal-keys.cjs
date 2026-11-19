@@ -25,6 +25,7 @@ if (registry.version !== 1 || !registry.keys || typeof registry.keys !== 'object
 }
 for (const [name, value] of Object.entries(values)) {
   if (!registry.keys[name]) throw new Error(`Key is not listed in registry: ${name}`);
+  if (registry.keys[name].source === 'external') throw new Error(`Credential is managed outside Pinmap: ${name}`);
   if (!value || ['[SENSITIVE]', '[REDACTED]'].includes(value)) throw new Error(`Key has no usable value: ${name}`);
   registry.keys[name].source = 'encrypted';
   if (registry.keys[name].comment.includes('이 파일에 없') || registry.keys[name].comment.includes('환경 변수를 참조')) {

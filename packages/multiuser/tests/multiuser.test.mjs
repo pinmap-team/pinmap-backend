@@ -280,3 +280,17 @@ test('ZIP auto-analysis persists all synthetic jobs, deduplicates and exposes pe
   assert.equal((await fetch(base+'/api/posts')).status,401);
  }finally{await new Promise(r=>app.server.close(r));app.db.close();await fs.rm(dataDir,{recursive:true,force:true});}
 });
+
+test('completed jobs do not impose a daily analysis quota',async()=>{
+ const folder=await fs.mkdtemp(path.join(os.tmpdir(),'pinmap-unlimited-')),db=openDatabase(path.join(folder,'pinmap.sqlite')),date=new Date().toISOString();
+ try{
+  db.prepare('INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)').run('u','u@example.com','test',date);
+  db.prepare('INSERT INTO posts(id,user_id,source_url,title,created_at,updated_at) VALUES(?,?,?,?,?,?)').run('p','u','https://www.instagram.com/p/example/','',date,date);
+  for(let i=0;i<55;i++){
+   const queued=await enqueueJob(db,'u','p',{providerName:'gemini',model:'gemini-2.5-flash',dailyJobLimit:1},{force:true,collectPublic:true,env:{PINMAP_EXTRACTOR_ORIGIN:'https://extractor.example.test'}});
+   assert.equal(queued.reused,false);
+   db.prepare("UPDATE jobs SET status='completed' WHERE id=?").run(queued.job.id);
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM jobs').get().n,55);
+ }finally{db.close();await fs.rm(folder,{recursive:true,force:true});}
+});

@@ -25,24 +25,23 @@ function jsonReply(body, status = 200) {
   return new Response(JSON.stringify(body), {status, headers: {'Content-Type': 'application/json'}});
 }
 
-test('official endpoint verifies Supabase user, atomically claims quota, and requests both content types', async () => {
+test('official endpoint verifies Supabase user and requests both content types', async () => {
   const restore = configure(), originalFetch = global.fetch, calls = [];
   try {
     global.fetch = async (url, options) => {
       calls.push({url: String(url), options});
       if (String(url).endsWith('/auth/v1/user')) return jsonReply(user);
-      if (String(url).endsWith('/rpc/pinmap_claim_content_extraction')) return jsonReply({allowed: true, remaining: 4});
+
       if (String(url).endsWith('/extract-link')) return jsonReply({schema_version: 1, results: [{places: [], events: []}]});
       throw new Error('Unexpected URL');
     };
     const res = response();
     await handler({method: 'POST', headers: {authorization: `Bearer ${token}`}, body: {url: post}}, res);
     assert.equal(res.code, 200);
-    assert.equal(calls.length, 3);
+    assert.equal(calls.length, 2);
     assert.equal(calls[0].options.headers.Authorization, `Bearer ${token}`);
-    assert.equal(calls[1].options.headers.Authorization, `Bearer ${token}`);
-    assert.equal(calls[2].options.headers.Authorization, 'Bearer private-extractor-token');
-    assert.deepEqual(JSON.parse(calls[2].options.body), {url: post, content_types: ['place', 'event']});
+        assert.equal(calls[1].options.headers.Authorization, 'Bearer private-extractor-token');
+    assert.deepEqual(JSON.parse(calls[1].options.body), {url: post, content_types: ['place', 'event']});
     assert.equal(res.headers['Cache-Control'], 'no-store');
     assert(!JSON.stringify(res.body).includes('private-extractor-token'));
   } finally {global.fetch = originalFetch; restore();}
@@ -66,27 +65,23 @@ test('official endpoint rejects invalid input and missing credentials before any
   } finally {global.fetch = originalFetch; restore();}
 });
 
-test('quota denial and missing quota RPC stop expensive extraction', async () => {
-  const restore = configure(), originalFetch = global.fetch;
-  try {
-    for (const quotaStatus of [429, 503]) {
-      let extractorCalls = 0;
-      global.fetch = async url => {
-        if (String(url).endsWith('/auth/v1/user')) return jsonReply(user);
-        if (String(url).endsWith('/rpc/pinmap_claim_content_extraction')) {
-          return quotaStatus === 429 ? jsonReply({allowed: false, remaining: 0}) : jsonReply({message: 'missing function'}, 404);
-        }
-        extractorCalls++; throw new Error('extractor must not run');
-      };
-      const res = response();
-      await handler({method: 'POST', headers: {authorization: `Bearer ${token}`}, body: {url: post}}, res);
-      assert.equal(res.code, quotaStatus);
-      assert.equal(extractorCalls, 0);
+test('more than five official analyses bypass legacy quota RPCs', async () => {
+  const restore=configure(),originalFetch=global.fetch;let analyses=0;
+  try{
+    global.fetch=async url=>{
+      if(String(url).endsWith('/auth/v1/user'))return jsonReply(user);
+      assert(String(url).endsWith('/extract-link'),'legacy quota RPC must not be called');
+      analyses++;return jsonReply({results:[{places:[],events:[]}]});
+    };
+    for(let i=0;i<8;i++){
+      const res=response();await handler({method:'POST',headers:{authorization:`Bearer ${token}`},body:{url:post}},res);
+      assert.equal(res.code,200);assert.equal(res.headers['Retry-After'],undefined);
     }
-  } finally {global.fetch = originalFetch; restore();}
+    assert.equal(analyses,8);
+  }finally{global.fetch=originalFetch;restore();}
 });
 
-test('failed Supabase verification never consumes quota', async () => {
+test('failed Supabase verification never reaches extraction', async () => {
   const restore = configure(), originalFetch = global.fetch;
   let calls = 0;
   try {
@@ -98,7 +93,7 @@ test('failed Supabase verification never consumes quota', async () => {
   } finally {global.fetch = originalFetch; restore();}
 });
 
-test('anonymous and incomplete user records cannot consume quota', async () => {
+test('anonymous and incomplete user records cannot reach extraction', async () => {
   const restore = configure(), originalFetch = global.fetch;
   try {
     for (const candidate of [{...user, is_anonymous: true}, {id: user.id}]) {
@@ -112,11 +107,7 @@ test('anonymous and incomplete user records cannot consume quota', async () => {
   } finally {global.fetch = originalFetch; restore();}
 });
 
-test('rate-limit retry time follows the next Seoul midnight', () => {
-  const at = Date.parse('2026-11-16T14:59:59Z'); // 23:59:59 KST
-  assert.equal(handler.secondsUntilSeoulMidnight(at), 1);
-  assert.equal(handler.secondsUntilSeoulMidnight(at + 1000), 86400);
-});
+
 
 test('event-only request reaches extractor without leaking a rejected upstream body', async () => {
   const restore = configure(), originalFetch = global.fetch;
@@ -124,7 +115,7 @@ test('event-only request reaches extractor without leaking a rejected upstream b
   try {
     global.fetch = async (url, options) => {
       if (String(url).endsWith('/auth/v1/user')) return jsonReply(user);
-      if (String(url).endsWith('/rpc/pinmap_claim_content_extraction')) return jsonReply({allowed: true, remaining: 3});
+
       submitted = JSON.parse(options.body);
       return new Response('internal extractor trace', {status: 500});
     };

@@ -52,14 +52,14 @@ const report = {
     evidence:{quote:'raw long OCR'}}]
 };
 
-test('POST authenticates, claims quota, analyzes on the server and upserts a bounded mixed record', async () => {
+test('POST authenticates, analyzes on the server and upserts a bounded mixed record', async () => {
   const restore = configure(), oldFetch = global.fetch, calls = [];
   try {
     global.fetch = async (url, options = {}) => {
       const target = String(url); calls.push({target,options});
       if (target.endsWith('/auth/v1/user')) return reply(user);
       if (target.includes('/pinmap_saved_content') && target.includes('limit=0')) return reply([]);
-      if (target.endsWith('/rpc/pinmap_claim_content_extraction')) return reply({allowed:true,remaining:4});
+
       if (target.endsWith('/extract-link')) return reply({schema_version:1,results:[report]});
       if (target.includes('/pinmap_saved_content') && options.method === 'POST') {
         const row = JSON.parse(options.body);
@@ -83,14 +83,14 @@ test('POST authenticates, claims quota, analyzes on the server and upserts a bou
       }
       throw Error(`unexpected ${target}`);
     };
-    const response = res();
-    await handler(req('POST',{url:post+'?utm_source=test'}),response);
+    let response;
+    for(let i=0;i<8;i++){response=res();await handler(req('POST',{url:post+'?utm_source=test'}),response);assert.equal(response.code,200);}
     assert.equal(response.code,200);
     assert.equal(response.body.item.source_url,post);
     assert.equal(response.body.analysis_status,'needs_review');
-    assert.equal(calls.length,5);
-    assert.equal(calls[3].target,'https://extractor.example.test/extract-link');
-    assert.deepEqual(JSON.parse(calls[3].options.body),{url:post,content_types:['place','event']});
+    assert.equal(calls.length,32);
+    assert.equal(calls[2].target,'https://extractor.example.test/extract-link');
+    assert.deepEqual(JSON.parse(calls[2].options.body),{url:post,content_types:['place','event']});
     assert.equal(response.headers['Cache-Control'],'no-store');
   } finally {global.fetch=oldFetch;restore();}
 });
@@ -146,7 +146,7 @@ test('collection failure saves an unknown link without raw OCR and never overwri
       const target=String(url);calls.push({target,options});
       if (target.endsWith('/auth/v1/user')) return reply(user);
       if (target.includes('/pinmap_saved_content') && target.includes('limit=0')) return reply([]);
-      if (target.endsWith('/rpc/pinmap_claim_content_extraction')) return reply({allowed:true,remaining:3});
+
       if (target.endsWith('/extract-link')) return reply({schema_version:1,results:[{
         source_url:post,status:'collection_failed',places:[],events:[],notes:['비공개 게시물입니다.'],
         observed_text:'do not store'
@@ -169,18 +169,18 @@ test('collection failure saves an unknown link without raw OCR and never overwri
     assert.deepEqual(response.body.item,existing);
     assert.equal(response.body.analysis_status,'collection_failed');
     assert.deepEqual(response.body.analysis_notes,['비공개 게시물입니다.']);
-    assert.equal(calls.length,6);
+    assert.equal(calls.length,5);
   } finally {global.fetch=oldFetch;restore();}
 });
 
-test('extractor network failure preserves a new link after one quota claim', async () => {
+test('extractor network failure preserves a new link without a quota dependency', async () => {
   const restore=configure(),oldFetch=global.fetch;
   try {
     global.fetch=async (url,options={}) => {
       const target=String(url);
       if (target.endsWith('/auth/v1/user')) return reply(user);
       if (target.includes('/pinmap_saved_content') && target.includes('limit=0')) return reply([]);
-      if (target.endsWith('/rpc/pinmap_claim_content_extraction')) return reply({allowed:true,remaining:2});
+
       if (target.endsWith('/extract-link')) throw Error('network down');
       const row=JSON.parse(options.body);
       assert.equal(row.status,'extractor_unavailable');
@@ -202,7 +202,7 @@ test('zero extracted items still save the Instagram link with a review reason', 
       const target=String(url);
       if (target.endsWith('/auth/v1/user')) return reply(user);
       if (target.includes('/pinmap_saved_content') && target.includes('limit=0')) return reply([]);
-      if (target.endsWith('/rpc/pinmap_claim_content_extraction')) return reply({allowed:true,remaining:1});
+
       if (target.endsWith('/extract-link')) return reply({schema_version:1,results:[{
         source_url:post,status:'needs_media_or_ai',places:[],events:[],
         notes:['이미지의 장소 이름을 확인하지 못했습니다.']
@@ -226,7 +226,7 @@ test('malformed extractor result is saved as a retriable unknown link, without i
       const target=String(url);
       if (target.endsWith('/auth/v1/user')) return reply(user);
       if (target.includes('/pinmap_saved_content') && target.includes('limit=0')) return reply([]);
-      if (target.endsWith('/rpc/pinmap_claim_content_extraction')) return reply({allowed:true,remaining:1});
+
       if (target.endsWith('/extract-link')) return reply({schema_version:1,results:[{
         source_url:'https://www.instagram.com/p/SomeoneElse/',status:'extracted',
         places:[{name:'wrong post'}],events:[]
@@ -243,7 +243,7 @@ test('malformed extractor result is saved as a retriable unknown link, without i
   } finally {global.fetch=oldFetch;restore();}
 });
 
-test('invalid credentials, missing storage and exhausted quota never call the expensive extractor', async () => {
+test('invalid credentials and missing storage never call the extractor', async () => {
   const restore=configure(),oldFetch=global.fetch;
   try {
     let calls=0;
@@ -260,16 +260,6 @@ test('invalid credentials, missing storage and exhausted quota never call the ex
     response=res();await handler(req(),response);
     assert.equal(response.code,503);assert.equal(response.body.error,'storage_unavailable');
 
-    calls=0;
-    global.fetch=async url => {
-      calls++;
-      if (String(url).endsWith('/auth/v1/user')) return reply(user);
-      if (String(url).includes('limit=0')) return reply([]);
-      if (String(url).endsWith('/rpc/pinmap_claim_content_extraction')) return reply({allowed:false,remaining:0});
-      throw Error('extractor must not run');
-    };
-    response=res();await handler(req(),response);
-    assert.equal(response.code,429);assert.equal(calls,3);
   } finally {global.fetch=oldFetch;restore();}
 });
 
@@ -321,7 +311,7 @@ test('database per-user save limit is a user-facing conflict, without leaking SQ
       const target=String(url);
       if (target.endsWith('/auth/v1/user')) return reply(user);
       if (target.includes('/pinmap_saved_content') && target.includes('limit=0')) return reply([]);
-      if (target.endsWith('/rpc/pinmap_claim_content_extraction')) return reply({allowed:true,remaining:1});
+
       if (target.endsWith('/extract-link')) return reply({schema_version:1,results:[report]});
       if (options.method==='POST') return reply({code:'PZ001',message:'private table details'},400);
       throw Error('unexpected');

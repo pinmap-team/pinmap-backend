@@ -1,5 +1,4 @@
 const crypto = require('node:crypto');
-const { projectUrl } = require('./auth/config');
 
 const MAX_EXTRACTOR_RESPONSE_BYTES = 12 * 1024 * 1024;
 
@@ -41,29 +40,6 @@ function extractorConfig(env = process.env) {
   if (!token || target.protocol !== 'https:' || target.username || target.password ||
       target.pathname !== '/' || target.search || target.hash) return null;
   return { target: new URL('/extract-link', target), token };
-}
-
-function developerQuotaConfig(env = process.env) {
-  const origin = projectUrl(env.SUPABASE_URL);
-  const secret = String(env.SUPABASE_SECRET_KEY || '').trim();
-  return origin && /^sb_secret_[A-Za-z0-9_-]{8,}$/.test(secret)
-    ? { origin, secret } : null;
-}
-
-async function claimDeveloperQuota(config, fetcher = fetch) {
-  try {
-    const response = await fetcher(new URL('/rest/v1/rpc/pinmap_claim_developer_test', config.origin), {
-      method: 'POST',
-      headers: { apikey: config.secret, 'Content-Type': 'application/json' },
-      body: '{}', signal: AbortSignal.timeout(8000)
-    });
-    if (!response.ok) return { status: 503 };
-    const result = await response.json();
-    if (typeof result?.allowed !== 'boolean' || !Number.isInteger(result.remaining) || result.remaining < 0) {
-      return { status: 503 };
-    }
-    return { status: result.allowed ? 200 : 429, remaining: result.remaining };
-  } catch { return { status: 503 }; }
 }
 
 async function readJsonLimited(response) {
@@ -111,8 +87,7 @@ module.exports = async function placeExtract(req, res) {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'method_not_allowed' });
   }
-  const quotaConfig = developerQuotaConfig();
-  if (!extractorConfig() || !process.env.PINMAP_TEST_ACCESS_CODE || !quotaConfig) {
+  if (!extractorConfig() || !process.env.PINMAP_TEST_ACCESS_CODE) {
     return res.status(503).json({ error: 'online_test_not_configured' });
   }
   if (!equalSecret(req.headers['x-pinmap-test-code'], process.env.PINMAP_TEST_ACCESS_CODE)) {
@@ -121,9 +96,6 @@ module.exports = async function placeExtract(req, res) {
   let payload;
   try { payload = extractionRequest(req.body, ['place']); }
   catch { return res.status(400).json({ error: 'invalid_request' }); }
-  const quota = await claimDeveloperQuota(quotaConfig);
-  if (quota.status === 503) return res.status(503).json({ error: 'test_quota_unavailable' });
-  if (quota.status === 429) return res.status(429).json({ error: 'daily_test_limit', remaining: 0 });
   const forwarded = await forwardExtraction(payload);
   return res.status(forwarded.status).json(forwarded.body);
 };
@@ -132,6 +104,4 @@ module.exports.instagramLink = instagramLink;
 module.exports.contentTypes = contentTypes;
 module.exports.extractionRequest = extractionRequest;
 module.exports.extractorConfig = extractorConfig;
-module.exports.developerQuotaConfig = developerQuotaConfig;
-module.exports.claimDeveloperQuota = claimDeveloperQuota;
 module.exports.forwardExtraction = forwardExtraction;

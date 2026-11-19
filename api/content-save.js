@@ -6,7 +6,7 @@ const MAX_DATABASE_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_LENGTH = 410000;
 const MAX_MAP_IMAGE_LENGTH = 125000;
 const MAX_MAP_IMAGE_TOTAL = 500000;
-const SELECT = 'id,user_id,source_url,content_kind,status,ai_title,ai_summary,author_username,' +
+const SELECT = 'id,user_id,source_url,content_kind,classification,status,ai_title,ai_summary,author_username,' +
   'author_profile_data_url,cover_data_url,places,events,map_locations,extraction_notes,' +
   'media_warnings,created_at,updated_at';
 
@@ -67,6 +67,16 @@ function evidence(value) {
   return { kind: optionalText(value.kind, 40), quote: optionalText(value.quote, 180),
     file: optionalText(value.file, 100),
     time_seconds: Number.isFinite(seconds) && seconds >= 0 && seconds <= 36000 ? seconds : null };
+}
+
+function classification(value) {
+  if (!value || value.source !== 'gemini_decisions' || value.status !== 'classified' ||
+      value.model !== 'gemini-decision-1' ||
+      !['place', 'event', 'mixed', 'unknown'].includes(value.kind) ||
+      !['restaurant', 'cafe', 'bar', 'exhibition', 'pop_up', 'other'].includes(value.category) ||
+      !Number.isFinite(value.confidence) || value.confidence < .8 || value.confidence > 1) return {};
+  return { source: value.source, status: value.status, model: value.model,
+    kind: value.kind, category: value.category, confidence: value.confidence };
 }
 
 function sanitizeReport(report, sourceUrl, userId) {
@@ -140,6 +150,7 @@ function sanitizeReport(report, sourceUrl, userId) {
   const status = contentKind === 'unknown' && ['extracted', 'needs_review'].includes(report.status)
     ? 'needs_media_or_ai' : report.status;
   return { user_id: userId, source_url: sourceUrl, content_kind: contentKind,
+    classification: classification(report.classification),
     status, ai_title: optionalText(report.ai_title, 160),
     ai_summary: optionalText(report.ai_summary, 800),
     author_username: optionalText(report.author_username, 64),

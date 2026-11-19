@@ -31,6 +31,7 @@ from ai_request_cache import cached_ai_response, track_ai_cache
 from ai_input import compact_analysis_input, compact_text
 from ocr_tesseract import read_tesseract_images
 from content_ai import analyze_content
+from decisions import enabled as decisions_enabled, classify as classify_content, verify_maps
 
 HERE = Path(__file__).resolve().parent
 ENTRY = 'your_instagram_activity/saved/saved_posts.json'
@@ -332,7 +333,7 @@ def lookup_place_address(name, settings=None, opener=None, area_hint=None, searc
                                                           'regionCode': 'KR', 'pageSize': 10}).encode('utf-8'),
                                          method='POST', headers={'Content-Type': 'application/json',
                                                                  'X-Goog-Api-Key': google_key,
-                                                                 'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location,nextPageToken'})
+                                                                 'X-Goog-FieldMask': 'places.displayName,places.formattedAddress,places.location,places.primaryType,nextPageToken'})
     else:
         provider = 'photon_openstreetmap'
         features = photon_features(scoped_query, opener)
@@ -364,7 +365,7 @@ def lookup_place_address(name, settings=None, opener=None, area_hint=None, searc
             address = item.get('roadAddress') or item.get('address')
             if not isinstance(name, str) or not isinstance(address, str):
                 continue
-            candidate = {'name': name, 'address': address}
+            candidate = {'name': name, 'address': address, 'type': str(item.get('category') or '')[:160]}
             try:
                 point = {'lat': int(item['mapy']) / 10000000, 'lng': int(item['mapx']) / 10000000}
                 if valid_korean_point(point):
@@ -379,6 +380,7 @@ def lookup_place_address(name, settings=None, opener=None, area_hint=None, searc
     else:
         raw = [{'name': (item.get('displayName') or {}).get('text') or '',
                 'address': item.get('formattedAddress') or '',
+                'type': str(item.get('primaryType') or '')[:160],
                 'coordinates': {'lat': (item.get('location') or {}).get('latitude'),
                                 'lng': (item.get('location') or {}).get('longitude')}} for item in (body.get('places') or [])
                if isinstance(item, dict) and isinstance(item.get('displayName') or {}, dict)
@@ -393,6 +395,14 @@ def lookup_place_address(name, settings=None, opener=None, area_hint=None, searc
                len(normalized_place_name(item['name'])) - len(target) <= 10))]
     candidates = list({(item['name'], item['address'].strip()): item for item in exact}.values())
     candidates = sorted(candidates, key=lambda item: (item['name'], item['address']))
+    if decisions_enabled(settings) and raw and (area_hint or search_keyword):
+        # Keep bounded provider aliases for verification instead of deleting them by spelling.
+        pool = list({(item['name'], item['address'].strip()): item for item in raw
+                     if item.get('address', '').strip()}.values())[:10]
+        if pool:
+            return {'status': 'matched' if len(candidates) == 1 and len(pool) == 1 and not more else 'ambiguous',
+                    'provider': provider, 'candidates': candidates,
+                    'verification_candidates': pool, 'has_more': more}
     if provider == 'google_places' and not candidates and (area_hint or search_keyword):
         # Broad text queries can bury the named venue. Retry without the category,
         # then without the area, while retaining the exact-name candidate check.
@@ -432,8 +442,32 @@ def resolve_missing_addresses(places, caption='', max_workers=None):
             return {'status': 'lookup_failed', 'provider': 'map_search', 'candidates': []}
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         cache = dict(zip(keys, pool.map(search, keys)))
+    decision_settings = ai_settings()
+    decision_tasks = []
+    for index, place in enumerate(places):
+        lookup = cache.get((place.get('name'), place.get('area_hint'), place.get('search_keyword')), {})
+        pool = lookup.get('verification_candidates', lookup.get('candidates', []))
+        quote = (place.get('evidence') or {}).get('quote') or (caption if len(places) == 1 else '')
+        context_text = ' '.join(filter(None, [place.get('area_hint'), place.get('search_keyword'), quote]))
+        ranked = rank_candidates(place.get('name'), pool, context_text)
+        hint = normalized_place_name(place.get('area_hint'))
+        business_groups = {'카페': ('cafe', 'coffee', 'bakery', '카페', '커피'),
+                           '칵테일': ('bar', 'pub', '주점', '바'), '주점': ('bar', 'pub', '주점', '바'),
+                           '식당': ('restaurant', 'food', '음식', '식당')}
+        candidate_type = str(ranked[0].get('type') or '').lower() if ranked else ''
+        business_ok = all(not candidate_type or any(word in candidate_type for word in words)
+                          for keyword, words in business_groups.items() if keyword in (place.get('search_keyword') or ''))
+        unique_exact = (len(ranked) == 1 and not lookup.get('has_more') and business_ok and
+                        normalized_place_name(ranked[0].get('name')) == normalized_place_name(place.get('name')) and
+                        (not hint or hint in normalized_place_name(ranked[0].get('address'))))
+        address_ok = not place.get('address') or (ranked and compatible_place_addresses(place['address'], ranked[0].get('address')))
+        if ranked and decisions_enabled(decision_settings) and (not unique_exact or not address_ok):
+            decision_tasks.append({'id': 'venue_' + str(index), 'name': place.get('name'),
+                                   'context': context_text, 'address': place.get('address'), 'candidates': ranked})
+    decisions = verify_maps(decision_tasks, decision_settings)
+    tasks_by_id = {task['id']: task for task in decision_tasks}
     geocoded = {}
-    for place in places:
+    for place_index, place in enumerate(places):
         name = place.get('name')
         if name:
             hint = place.get('area_hint')
@@ -443,12 +477,27 @@ def resolve_missing_addresses(places, caption='', max_workers=None):
             evidence = place.get('evidence') or {}
             context = ' '.join(x for x in (place.get('area_hint'), evidence.get('quote') or (caption if len(places) == 1 else '')) if x)
             ranked = rank_candidates(name, lookup.get('candidates', []), context)
+            decision_key = 'venue_' + str(place_index)
+            decision = decisions.get(decision_key)
+            decision_selected = False
+            if decision:
+                place['map_validation'] = {'source': 'gemini_decisions', **decision}
+                if decision['status'] == 'selected':
+                    selected = tasks_by_id[decision_key]['candidates'][decision['index']]
+                    ranked = [selected] + [candidate for candidate in ranked if
+                        (candidate.get('name'), candidate.get('address')) != (selected.get('name'), selected.get('address'))]
+                    decision_selected = True
+                elif decision['status'] in ('rejected', 'uncertain'):
+                    ranked = []
+                    notes.append(name + ': 지도 후보를 확정할 근거가 부족해 자동 선택하지 않았습니다.')
+                else:
+                    notes.append(name + ': AI 후보 검증을 사용할 수 없어 기존 검색 규칙으로 처리했습니다.')
             place['map_lookup'] = {**lookup, 'candidates': ranked}
             best = ranked[0] if ranked else None
             bare_name_conflict = (best and place.get('area_hint') and lookup.get('name_only_fallback')
                                   and normalized_place_name(place['area_hint']) not in
                                   normalized_place_name(best.get('address', '') + ' ' + best.get('name', '')))
-            if best and best['score'] >= 0.5 and not bare_name_conflict:
+            if best and (decision_selected or best['score'] >= 0.5) and (decision_selected or not bare_name_conflict):
                 if not place.get('address'):
                     place['address'] = best.get('address') or None
                     place['address_source'] = lookup['provider']
@@ -457,7 +506,8 @@ def resolve_missing_addresses(places, caption='', max_workers=None):
                     if valid_world_point(point):
                         place['coordinates'] = point
                         place['coordinate_source'] = lookup['provider']
-                place['map_selection'] = 'tentative' if len(ranked) > 1 and best['score'] - ranked[1]['score'] < 0.15 else 'probable'
+                place['map_selection'] = ('decision_reviewed' if decision_selected else
+                    'tentative' if len(ranked) > 1 and best['score'] - ranked[1]['score'] < 0.15 else 'probable')
                 place['needs_review'] = True
             elif bare_name_conflict:
                 notes.append(name + ': 지역 단서와 맞지 않는 이름 검색 결과라 지도 위치를 선택하지 않았습니다.')
@@ -487,7 +537,9 @@ def map_locations_from_places(places):
             continue
         lookup = place.get('map_lookup') or {}
         candidates = lookup.get('candidates') or []
-        confidence = candidates[0].get('score') if candidates else None
+        validation = place.get('map_validation') or {}
+        confidence = (validation.get('confidence') if validation.get('status') == 'selected'
+                      else candidates[0].get('score') if candidates else None)
         provider = place.get('coordinate_source')
         location = {'name': place.get('name'), 'address': place.get('address'),
                     'coordinates': place['coordinates'], 'source': place.get('source'),
@@ -1078,12 +1130,18 @@ def extract_one(post, media_root=None, ignore_caption=False, content_types=('pla
     map_locations = map_locations_from_places(places)
     status = ('extracted' if places and not events and all(not p['needs_review'] for p in places)
               else 'needs_review' if places or events else 'needs_media_or_ai')
+    classification_text = '\n'.join([caption, ai_title or '', ai_summary or ''] +
+        [' '.join(row.get('lines', [])) for row in rows] +
+        [str(t.get('text') or '') for t in audio_transcripts])
+    with measure_stage(context, 'classification'):
+        classification = classify_content(classification_text, ai_settings())
+    context['counts']['classification_source'] = classification.get('source')
     content_kind = ('mixed' if places and events else 'place' if places else 'event' if events else 'unknown')
     return {'post_id': post_id, 'source_url': post['source_url'], 'status': status,
             'ai_title': ai_title, 'ai_summary': ai_summary,
             'author_username': post.get('author_username'),
             'author_profile_data_url': post.get('author_profile_data_url'),
-            'route': route, 'content_kind': content_kind, 'events': events,
+            'route': route, 'content_kind': content_kind, 'classification': classification, 'events': events,
             'media_files': [p.name for p in files], 'places': places,
             'map_locations': map_locations, 'observed_text': observed_text, 'screen_text': screen_text,
             'audio_transcripts': audio_transcripts, 'notes': notes}
@@ -1420,7 +1478,7 @@ def extract_link(url, ignore_caption=False, content_types=None):
         result['notes'] = list(dict.fromkeys(notes + result['notes']))
         context['total_seconds'] = round(time.monotonic() - analysis_started, 3)
         result['analysis_metrics'] = {key: value for key, value in context.items() if key != 'ocr_rows'}
-        return {'schema_version': 1, 'place_only_test': place_only, 'category_classification': False,
+        return {'schema_version': 1, 'place_only_test': place_only, 'category_classification': result.get('classification', {}).get('source') == 'gemini_decisions',
                 'input': 'instagram_link', 'results': [result]}
 
 
@@ -1428,7 +1486,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path != '/health':
             return self.respond(404, {'error': 'not_found'})
-        self.respond(200, {'ok': True, 'service': 'pinmap-place-extraction-test'})
+        self.respond(200, {'ok': True, 'service': 'pinmap-place-extraction-test',
+                                 'build': os.getenv('PINMAP_BUILD_SHA', ''),
+                                 'decisions_enabled': decisions_enabled(ai_settings())})
 
     def do_POST(self):
         token = os.getenv('PINMAP_TEST_TOKEN', '')

@@ -28,11 +28,12 @@ test('one encrypted file takes priority over legacy deployed values', () => {
   const master = crypto.randomBytes(32);
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', master, iv);
-  const data = Buffer.concat([cipher.update(JSON.stringify({GEMINI_API_KEY:'new-test-key'})), cipher.final()]);
-  fs.writeFileSync(filename, JSON.stringify({version:1,iv:iv.toString('base64'),tag:cipher.getAuthTag().toString('base64'),data:data.toString('base64')}));
+  const data = Buffer.concat([cipher.update(JSON.stringify({GEMINI_API_KEY:'new-test-key',GOOGLE_MAPS_SERVER_KEY:'not-used'})), cipher.final()]);
+  fs.writeFileSync(filename, JSON.stringify({version:1,keys:{GEMINI_API_KEY:{source:'encrypted',environment:'GEMINI_API_KEY'},GOOGLE_MAPS_SERVER_KEY:{source:'environment',environment:'GOOGLE_MAPS_SERVER_KEY'}},iv:iv.toString('base64'),tag:cipher.getAuthTag().toString('base64'),data:data.toString('base64')}));
   try {
-    const env = {PINMAP_KEYS_MASTER_KEY:master.toString('hex'), PINMAP_KEYS_ENCRYPTED_FILE:filename, GEMINI_API_KEY:'old-test-key'};
+    const env = {PINMAP_KEYS_MASTER_KEY:master.toString('hex'), PINMAP_KEYS_ENCRYPTED_FILE:filename, GEMINI_API_KEY:'old-test-key', GOOGLE_MAPS_SERVER_KEY:'environment-test-key'};
     assert.equal(getKey('GEMINI_API_KEY', env), 'new-test-key');
+    assert.equal(getKey('GOOGLE_MAPS_SERVER_KEY', env), 'environment-test-key');
     assert.throws(() => getKey('GEMINI_API_KEY', {...env,PINMAP_KEYS_MASTER_KEY:crypto.randomBytes(32).toString('hex')}));
   } finally {
     fs.rmSync(directory, {recursive:true,force:true});

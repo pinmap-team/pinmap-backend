@@ -1,7 +1,103 @@
 {
   "version": 1,
   "algorithm": "AES-256-GCM",
-  "iv": "IiQq/9bIqvW+6Ig4",
-  "tag": "KleeDj1alPLhCFWQsHtqIQ==",
-  "data": "KstXjWrSs7pZfw1Kw3h8Mw/rTlR26V8HMeEsUilLSP4d9o0oEKgAxpX5avHgtnXyIz3Psu2QLZjRmYbliiFBBnjQOq5MTYqlkLr+I1s7X8OWLPPDNwnamq3N4DrzZlnOu7De/Kp/jQon+btSqneZSaArtogfrESigD9OWfjI157FfEdUIjV5t0zrDXUS54yHqa6AKb69u7TAifvyhxMW2acCNr/eGabK1Uw4r1B8x9dO8gY6hCtmWE59tHhOXyuPayolnyNtfQSeP+m3EuPnKoRVQVzgFpQ7INb5WmTzCD3Jv4DLWZXdMEYEGrmh0NEh7Nk="
+  "iv": "PBqDcplCZxc0fXm0",
+  "tag": "RgBavQu7talvYAyzi4XcrQ==",
+  "data": "5zBwCCPd8GH6Js+AvMyQC2Wjvn2JT/Pm3Tsv02RAIZqD41AHsskYFDbBaUzPgfffmyfDq9xdBO3zGTlcdghNUVOHqBjP/zfx3XOkV4R7OTJABeQLIrCXtUDJ+DGE8ylFAf8bl37daZDfiw90Ekk+LALD44BxFighXNdayH8wobQGun6qkhcWMxQqKSCJisDQL/rC7P0c50brjeol2DC0egcrxabH6ULw5frbDM19l/nPiFNk1qDcbmPDVC0G8jkMMr9siFOeAORWIeNR1DKquvoDFghJxw7DiHaqvLPGOWRBaNRXiY8CmVq4CfxGiy9GjNM=",
+  "bootstrap": {
+    "environment": "PINMAP_KEYS_MASTER_KEY",
+    "comment": "암호문 복호화 키. 이 파일 안에 넣을 수 없으므로 실행 서버의 Secret 환경 변수에만 보관합니다."
+  },
+  "keys": {
+    "ASR_API_KEY": {
+      "source": "environment",
+      "environment": "ASR_API_KEY",
+      "comment": "별도 다중 사용자 음성 전사 서비스의 선택 키. 운영 값은 확인되지 않았습니다."
+    },
+    "GEMINI_API_KEY": {
+      "source": "environment",
+      "environment": "GEMINI_API_KEY",
+      "comment": "Cloud Run의 AI 분석 키. 현재 운영 값은 이 파일에 없고 Cloud Run 환경 변수를 참조합니다."
+    },
+    "GOOGLE_MAPS_API_KEY": {
+      "source": "environment",
+      "environment": "GOOGLE_MAPS_API_KEY",
+      "comment": "Cloud Run 장소 검색 및 별도 다중 사용자 서비스의 Google 키. 현재 운영 값은 이 파일에 없습니다."
+    },
+    "GOOGLE_MAPS_BROWSER_KEY": {
+      "source": "encrypted",
+      "environment": "GOOGLE_MAPS_BROWSER_KEY",
+      "comment": "Vercel 지도 설정 API가 반환하는 공개 브라우저 키. 값은 암호문에 들어 있습니다."
+    },
+    "GOOGLE_MAPS_SERVER_KEY": {
+      "source": "environment",
+      "environment": "GOOGLE_MAPS_SERVER_KEY",
+      "comment": "Vercel 서버 전용 Google Places 키. Vercel Secret이어서 원래 값을 조회할 수 없으며 현재 환경 변수를 참조합니다."
+    },
+    "GOOGLE_PLACES_API_KEY": {
+      "source": "environment",
+      "environment": "GOOGLE_PLACES_API_KEY",
+      "comment": "이전 연동과 응답 비밀값 필터에 등장하는 선택 키. 현재 운영 값은 확인되지 않았습니다."
+    },
+    "KAKAO_MAP_JAVASCRIPT_KEY": {
+      "source": "encrypted",
+      "environment": "KAKAO_MAP_JAVASCRIPT_KEY",
+      "comment": "Vercel에서 확인한 카카오 브라우저 키. 값은 암호문에 들어 있습니다."
+    },
+    "NAVER_CLIENT_ID": {
+      "source": "environment",
+      "environment": "NAVER_CLIENT_ID",
+      "comment": "Cloud Run의 네이버 검색 설정 키. 현재 운영 값은 확인되지 않았습니다."
+    },
+    "NAVER_CLIENT_SECRET": {
+      "source": "environment",
+      "environment": "NAVER_CLIENT_SECRET",
+      "comment": "Cloud Run의 네이버 검색 비밀키. 현재 운영 값은 확인되지 않았습니다."
+    },
+    "NAVER_MAP_CLIENT_ID": {
+      "source": "encrypted",
+      "environment": "NAVER_MAP_CLIENT_ID",
+      "comment": "Vercel에서 확인한 네이버 지도 브라우저 식별자. 값은 암호문에 들어 있습니다."
+    },
+    "OPENAI_API_KEY": {
+      "source": "environment",
+      "environment": "OPENAI_API_KEY",
+      "comment": "Cloud Run AI 분석의 선택 키. 현재 운영 값은 확인되지 않았습니다."
+    },
+    "PINMAP_EXTRACTOR_TOKEN": {
+      "source": "environment",
+      "environment": "PINMAP_EXTRACTOR_TOKEN",
+      "comment": "Vercel과 추출기 사이의 서버 토큰. Vercel Secret이어서 원래 값을 조회할 수 없으며 현재 환경 변수를 참조합니다."
+    },
+    "PINMAP_TEST_ACCESS_CODE": {
+      "source": "environment",
+      "environment": "PINMAP_TEST_ACCESS_CODE",
+      "comment": "Vercel 개발자 테스트 접근 코드. Vercel Secret이어서 원래 값을 조회할 수 없으며 현재 환경 변수를 참조합니다."
+    },
+    "PINMAP_TEST_LOGIN_PASSWORD": {
+      "source": "environment",
+      "environment": "PINMAP_TEST_LOGIN_PASSWORD",
+      "comment": "API 키는 아니지만 팀 테스트 계정의 로그인 비밀번호입니다. Vercel Secret으로 유지하며 이 파일에 값은 없습니다."
+    },
+    "PINMAP_TEST_TOKEN": {
+      "source": "environment",
+      "environment": "PINMAP_TEST_TOKEN",
+      "comment": "Cloud Run 추출기의 요청 인증 토큰. 현재 운영 값은 이 파일에 없고 Cloud Run 환경 변수를 참조합니다."
+    },
+    "SUPABASE_PUBLISHABLE_KEY": {
+      "source": "encrypted",
+      "environment": "SUPABASE_PUBLISHABLE_KEY",
+      "comment": "Vercel의 공개 Supabase 키. 값은 암호문에 들어 있습니다."
+    },
+    "SUPABASE_SECRET_KEY": {
+      "source": "environment",
+      "environment": "SUPABASE_SECRET_KEY",
+      "comment": "Vercel 서버 전용 Supabase 키. Vercel Secret이어서 원래 값을 조회할 수 없으며 현재 환경 변수를 참조합니다."
+    },
+    "VLLM_API_KEY": {
+      "source": "environment",
+      "environment": "VLLM_API_KEY",
+      "comment": "별도 다중 사용자 vLLM 서비스의 선택 인증 키. 현재 운영 값은 확인되지 않았습니다."
+    }
+  }
 }

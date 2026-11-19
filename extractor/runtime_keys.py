@@ -33,19 +33,31 @@ def read_key_file(filename):
 def settings_with_keys(environ=None):
     environ = dict(os.environ if environ is None else environ)
     settings = dict(environ)
-    settings.update(read_key_file(environ.get('PINMAP_KEYS_FILE')))
+    local = read_key_file(environ.get('PINMAP_KEYS_FILE'))
+    settings.update(local)
+    source = Path(environ.get('PINMAP_KEYS_ENCRYPTED_FILE') or DEFAULT_ENCRYPTED_FILE)
+    payload = json.loads(source.read_text(encoding='utf-8'))
+    if payload.get('version') != 1 or not isinstance(payload.get('keys'), dict):
+        raise ValueError('Invalid production key registry')
+    for name, entry in payload['keys'].items():
+        if entry.get('source') not in ('encrypted', 'environment') or not entry.get('environment'):
+            raise ValueError(f'Invalid production key entry: {name}')
+        if entry['source'] == 'environment' and name not in local:
+            settings[name] = environ.get(entry['environment'], '')
     master = environ.get('PINMAP_KEYS_MASTER_KEY')
     if master:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         if not re.fullmatch(r'[0-9a-fA-F]{64}', master):
             raise ValueError('PINMAP_KEYS_MASTER_KEY must be 32 bytes in hex')
-        source = Path(environ.get('PINMAP_KEYS_ENCRYPTED_FILE') or DEFAULT_ENCRYPTED_FILE)
-        payload = json.loads(source.read_text(encoding='utf-8'))
-        if payload.get('version') != 1:
-            raise ValueError('Unsupported encrypted key file version')
         cipher = base64.b64decode(payload['data']) + base64.b64decode(payload['tag'])
         data = AESGCM(bytes.fromhex(master)).decrypt(base64.b64decode(payload['iv']), cipher, None)
-        settings.update(json.loads(data.decode('utf-8')))
+        encrypted = json.loads(data.decode('utf-8'))
+        for name, entry in payload['keys'].items():
+            if entry.get('source') == 'encrypted':
+                value = encrypted.get(name)
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(f'Missing encrypted key: {name}')
+                settings[name] = value.strip()
     return settings
 
 

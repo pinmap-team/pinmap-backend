@@ -1,6 +1,8 @@
 .env
 .env.*
 !.env.example
+!.env.keys.example
+.keys-master.local
 node_modules/
 extractor/data/
 extractor/.venv/

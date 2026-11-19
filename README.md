@@ -31,6 +31,14 @@ Cloud Run 추출기는 먼저 Scrapling HTTP 요청으로 지정된 공개 사�
 
 ## 설정과 배포
 
+### API 키 보관
+
+운영 키의 단일 저장 파일은 [`extractor/production-keys.enc.json`](extractor/production-keys.enc.json)입니다. GitHub에는 AES-256-GCM으로 암호화된 값만 올라갑니다. Vercel과 Cloud Run에는 복호화용 `PINMAP_KEYS_MASTER_KEY`(64자리 16진수)를 **각각 서버 전용 환경 변수**로 등록합니다. 이 변수가 있으면 서버의 `config/keys.cjs`와 추출기의 `extractor/runtime_keys.py`가 같은 파일의 값을 우선 읽습니다. 변수가 없는 기존 배포는 이전 개별 환경 변수로 계속 동작합니다. 브라우저에는 지도용 공개 키만 기존 설정 API를 통해 전달합니다.
+
+키를 교체할 때는 Git에서 제외되는 `.env.keys.local`(권한 `600`)에서 해당 줄 하나를 수정하고 `node scripts/seal-keys.cjs`를 실행한 다음, 변경된 암호화 파일 하나만 커밋합니다. 복호화용 `.keys-master.local`(권한 `600`)도 로컬에 따로 두며 Git에 올리지 않습니다. `.env.keys.example`은 파일 형식 예시입니다. 로컬에서 암호화 파일을 쓰지 않을 때만 `PINMAP_KEYS_FILE`로 비공개 파일을 지정할 수 있습니다. `SUPABASE_URL`, `PINMAP_EXTRACTOR_ORIGIN` 같은 일반 설정은 기존 환경 변수로 유지합니다. 키 자체가 아니라 복호화 키를 바꾸면 두 서버의 `PINMAP_KEYS_MASTER_KEY`도 함께 변경해야 합니다.
+
+현재 암호화 파일에는 Vercel에서 값을 확인할 수 있었던 `GOOGLE_MAPS_BROWSER_KEY`, `KAKAO_MAP_JAVASCRIPT_KEY`, `NAVER_MAP_CLIENT_ID`, `SUPABASE_PUBLISHABLE_KEY`가 들어 있습니다. Vercel이 `[SENSITIVE]`로 가려 반환하는 `GOOGLE_MAPS_SERVER_KEY`, `PINMAP_EXTRACTOR_TOKEN`, `PINMAP_TEST_ACCESS_CODE`, `SUPABASE_SECRET_KEY`와 Cloud Run 추출기의 별도 키는 **아직 암호화 파일에 없습니다**. 이 값들은 기존 환경 변수로 읽습니다. 실제 값을 확인해 로컬 비공개 편집 파일에 넣은 뒤 다시 암호화해야 해당 키도 한 파일에서 교체됩니다. 가려진 문자열을 키로 저장하지 마세요.
+
 1. `SUPABASE_URL`이 가리키는 Supabase 프로젝트에 [`database/002_saved_content.sql`](database/002_saved_content.sql)을 적용합니다. 저장 콘텐츠는 계정당 100개로 제한됩니다. 분석 결과 행은 백엔드만 쓰며, 사용자는 자기 계정의 저장 항목만 읽을 수 있습니다. `001_content_extraction_quota.sql`과 `003_developer_test_quota.sql`은 이전 배포 이력이며 현재 API는 해당 횟수 제한 함수를 호출하지 않습니다. 기존 테이블의 기록은 삭제하지 않습니다.
 2. `extractor/`의 Dockerfile을 사용해 Cloud Run에 배포합니다. `PINMAP_TEST_TOKEN`에는 Vercel의 `PINMAP_EXTRACTOR_TOKEN`과 동일한 서버 전용 값을 설정합니다. AI 키와 지도 제공자 키는 Git이 아닌 Cloud Run에 설정합니다. Cloud Run 배포 버전은 별도로 배포하고 확인해야 합니다. Vercel의 Git 배포는 Cloud Run을 업데이트하지 않습니다.
 3. 이 저장소를 Vercel 프로젝트에 연결하고 `.env.example`에 설명된 Vercel 환경 변수들을 설정합니다. `SUPABASE_PUBLISHABLE_KEY`는 설계상 공개 키입니다. 새 API 경로를 배포하기 전에 `SUPABASE_SECRET_KEY`(`sb_secret_…`)를 **서버 전용** Vercel 환경 변수로 설정합니다. 이 값을 브라우저, Git, URL, 채팅에 넣지 마세요. 추출기 토큰은 서버에만 보관합니다. 개발자 테스트 코드는 Vercel에 설정하고 `X-Pinmap-Test-Code` 요청 헤더에만 넣으며, Git이나 공개 링크에는 넣지 않습니다.

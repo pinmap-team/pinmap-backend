@@ -1,5 +1,6 @@
 // The explicitly configured team test user; credentials stay on the server.
 const {projectUrl, publicKey} = require('./config');
+const {getKey} = require('../../config/keys.cjs');
 const EMAIL = 'pinmap2026@gmail.com';
 function enabled() {
   return process.env.PINMAP_TEST_LOGIN_ENABLED === 'true' && (process.env.PINMAP_TEST_LOGIN_PASSWORD || '').length >= 8;
@@ -10,7 +11,7 @@ async function handler(req, res) {
   if (!enabled()) return res.status(404).json({error:'테스트 로그인이 열려 있지 않아요.'});
   if (req.body && Object.keys(req.body).length) return res.status(400).json({error:'입력값 없이 다시 시도해 주세요.'});
   const url = projectUrl(process.env.SUPABASE_URL);
-  const key = publicKey(process.env.SUPABASE_PUBLISHABLE_KEY);
+  const key = publicKey(getKey('SUPABASE_PUBLISHABLE_KEY'));
   if (!url || !key) return res.status(503).json({error:'테스트 로그인을 준비 중이에요.'});
   const password = process.env.PINMAP_TEST_LOGIN_PASSWORD;
   async function request(path, body, apiKey = key) {

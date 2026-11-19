@@ -367,3 +367,14 @@ test('diagnostic notes never persist configured private API tokens', () => {
   } finally {old === undefined ? delete process.env.PINMAP_EXTRACTOR_TOKEN :
     process.env.PINMAP_EXTRACTOR_TOKEN=old;}
 });
+
+test('Decision classification persists only validated enums and bounded confidence', () => {
+  const classification={source:'gemini_decisions',model:'gemini-decision-1',status:'classified',kind:'place',category:'bar',confidence:.95,private_text:'do not store'};
+  const row=handler.sanitizeReport({...report,classification},post,userId);
+  assert.equal(row.classification.category,'bar');
+  assert.equal(row.classification.private_text,undefined);
+  for(const change of [{category:'invented'},{confidence:NaN},{confidence:.3},{confidence:1.1},{source:'browser'}]) {
+    assert.deepEqual(handler.sanitizeReport({...report,classification:{...classification,...change}},post,userId).classification,{});
+  }
+  assert.deepEqual(handler.sanitizeReport(report,post,userId).classification,{});
+});

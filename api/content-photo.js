@@ -1,12 +1,13 @@
 const {supabaseConfig,bearerToken,authenticatedUser}=require('./content-extract');
 const store=require('../lib/saved-photo-store');
+const {getKey}=require('../config/keys.cjs');
 const UUID=/^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 module.exports=async(req,res)=>{
  res.setHeader('Cache-Control','private, no-store');res.setHeader('Vary','Authorization');res.setHeader('X-Content-Type-Options','nosniff');
  if(req.method!=='POST'){res.setHeader('Allow','POST');return res.status(405).json({error:'method_not_allowed'});}
  let body;try{body=typeof req.body==='string'?JSON.parse(req.body):req.body;}catch{}
  if(!UUID.test(body?.content_id||'')||!Number.isInteger(body?.location_index)||body.location_index<0||body.location_index>=40)return res.status(400).json({error:'invalid_request'});
- const config=supabaseConfig(),storage=store.config(),key=process.env.GOOGLE_MAPS_SERVER_KEY;
+ const config=supabaseConfig(),storage=store.config(),key=getKey('GOOGLE_MAPS_SERVER_KEY');
  if(!config||!storage||!key)return res.status(503).json({error:'photo_not_configured'});
  const token=bearerToken(req.headers.authorization);if(!token)return res.status(401).json({error:'authentication_required'});
  const auth=await authenticatedUser(config,token);if(auth.status!==200)return res.status(auth.status).json({error:'authentication_required'});

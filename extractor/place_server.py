@@ -31,6 +31,7 @@ from ai_request_cache import cached_ai_response, track_ai_cache
 from ai_input import compact_analysis_input, compact_text
 from ocr_tesseract import read_tesseract_images
 from content_ai import analyze_content
+from runtime_keys import get_key, settings_with_keys
 
 HERE = Path(__file__).resolve().parent
 ENTRY = 'your_instagram_activity/saved/saved_posts.json'
@@ -44,14 +45,14 @@ VIDEO_EXT = {'.mp4', '.mov', '.webm'}
 
 
 def ai_settings():
-    settings = dict(os.environ)
+    settings = settings_with_keys()
     filename = os.getenv('PINMAP_AI_ENV_FILE')
     if filename:
         try:
             for line in Path(filename).read_text(encoding='utf-8').splitlines():
                 match = re.match(r'^\s*(MULTIUSER_AI_PROVIDER|MULTIUSER_MODEL|GEMINI_API_KEY|NAVER_CLIENT_ID|NAVER_CLIENT_SECRET|GOOGLE_MAPS_API_KEY)=(.*)$', line)
                 if match:
-                    settings[match.group(1)] = match.group(2).strip().strip('"\'')
+                    settings.setdefault(match.group(1), match.group(2).strip().strip('"\''))
         except OSError:
             pass
     return settings
@@ -1431,7 +1432,7 @@ class Handler(BaseHTTPRequestHandler):
         self.respond(200, {'ok': True, 'service': 'pinmap-place-extraction-test'})
 
     def do_POST(self):
-        token = os.getenv('PINMAP_TEST_TOKEN', '')
+        token = get_key('PINMAP_TEST_TOKEN')
         if not token:
             return self.respond(503, {'error': 'server_not_configured'})
         supplied = self.headers.get('Authorization', '')
@@ -1585,7 +1586,7 @@ def main():
     args = parser.parse_args()
     if args.command == 'serve':
         host = os.getenv('PINMAP_BIND_HOST', '127.0.0.1')
-        if host not in ('127.0.0.1', 'localhost', '::1') and not os.getenv('PINMAP_TEST_TOKEN'):
+        if host not in ('127.0.0.1', 'localhost', '::1') and not get_key('PINMAP_TEST_TOKEN'):
             parser.error('외부 접속을 허용하려면 PINMAP_TEST_TOKEN이 필요합니다.')
         server = ThreadingHTTPServer((host, args.port), Handler)
         print('장소 추출 API: http://%s:%d' % (host, args.port), flush=True)

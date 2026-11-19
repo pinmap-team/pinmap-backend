@@ -13,6 +13,9 @@ import {normalizeEmail,hashPassword,verifyPassword,newSession,sessionUser,logout
 import {parseInstagramExport,instagramUrl} from './import.mjs';
 import {getPost,postAssets,enqueueJob,enqueueImportedPosts,jobForUser,cancelJob} from './jobs.mjs';
 import {getGooglePlacePhoto} from './google-place-photo.mjs';
+import keyStore from '../../../config/keys.cjs';
+
+const {getKey} = keyStore;
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 const json=(res,status,body,headers={})=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers});res.end(JSON.stringify(body));};
@@ -59,7 +62,7 @@ export async function createMultiuserApp({dataDir=path.resolve(process.env.MULTI
       res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
       if(req.method==='GET'&&url.pathname==='/health'){json(res,200,{ok:true,service:'pinmap-multiuser'});return;}
       if(req.method==='GET'&&url.pathname==='/api/map-config'){
-        const googleBrowserKey=env.GOOGLE_MAPS_BROWSER_KEY||'';
+        const googleBrowserKey=getKey('GOOGLE_MAPS_BROWSER_KEY',env);
         json(res,200,{defaultProvider:'google',available:{google:Boolean(googleBrowserKey)},googleBrowserKey});return;
       }
       if(req.method==='GET'&&frontendDir&&!url.pathname.startsWith('/api/')){
@@ -109,13 +112,13 @@ export async function createMultiuserApp({dataDir=path.resolve(process.env.MULTI
       if(req.method==='GET'&&url.pathname==='/api/me'){json(res,200,{user,settings:{provider:settings.providerName,model:settings.model,max_images:settings.maxImages}});return;}
       const placePhotoRoute=url.pathname.match(/^\/api\/posts\/([a-f0-9-]{36})\/places\/(\d{1,2})\/photo$/);
       if(req.method==='GET'&&placePhotoRoute){
-        if(!env.GOOGLE_MAPS_BROWSER_KEY||!env.GOOGLE_MAPS_API_KEY)throw new AppError('Google 지도와 장소 사진을 설정해야 합니다.',{status:503});
+        if(!getKey('GOOGLE_MAPS_BROWSER_KEY',env)||!getKey('GOOGLE_MAPS_API_KEY',env))throw new AppError('Google 지도와 장소 사진을 설정해야 합니다.',{status:503});
         const [_,postId,indexText]=placePhotoRoute,post=getPost(db,user.id,postId),index=Number(indexText);
         if(!post||index>19)throw new AppError('장소를 찾지 못했습니다.',{status:404});
         const job=db.prepare("SELECT result_json FROM jobs WHERE user_id=? AND post_id=? AND status='completed' ORDER BY completed_at DESC,rowid DESC LIMIT 1").get(user.id,postId);
         const location=job?.result_json?JSON.parse(job.result_json).map_location?.locations?.[index]:null;
         if(!location)throw new AppError('장소를 찾지 못했습니다.',{status:404});
-        const photo=await photoLookup(location,{key:env.GOOGLE_MAPS_API_KEY});
+        const photo=await photoLookup(location,{key:getKey('GOOGLE_MAPS_API_KEY',env)});
         if(!photo)throw new AppError('이 장소의 Google 사진을 확인하지 못했습니다.',{status:404});
         json(res,200,photo);return;
       }

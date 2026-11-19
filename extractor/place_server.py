@@ -33,6 +33,7 @@ from ocr_tesseract import read_tesseract_images
 from content_ai import analyze_content
 from decisions import enabled as decisions_enabled, classify as classify_content, verify_maps
 from runtime_keys import get_key, settings_with_keys
+from caption_policy import caption_coverage
 
 HERE = Path(__file__).resolve().parent
 ENTRY = 'your_instagram_activity/saved/saved_posts.json'
@@ -1064,6 +1065,15 @@ def measure_stage(context, name):
         print(json.dumps({'stage': 'analysis_timing', 'step': name, 'seconds': elapsed}), file=sys.stderr, flush=True)
 
 
+def caption_analysis_policy(caption, content_types, places=None, events=None):
+    if os.getenv('PINMAP_CAPTION_FAST_PATH', '1') == '0':
+        return False, 'disabled'
+    places = caption_places(caption) if places is None and 'place' in content_types else (places or [])
+    events = extract_text_events(caption) if events is None and 'event' in content_types else (events or [])
+    return caption_coverage(caption, places, events, 'place' in content_types,
+                            'event' in content_types, event_signals(caption))
+
+
 def extract_one(post, media_root=None, ignore_caption=False, content_types=('place',), analysis_context=None):
     context = analysis_context if analysis_context is not None else {}
     context.setdefault('counts', {})
@@ -1071,10 +1081,22 @@ def extract_one(post, media_root=None, ignore_caption=False, content_types=('pla
     caption = '' if ignore_caption else post['caption']
     want_places, want_events = 'place' in content_types, 'event' in content_types
     places = caption_places(caption) if want_places else []
-    events, notes, observed_text, screen_text, audio_transcripts, rows, images = [], [], [], [], [], [], []
+    caption_events = extract_text_events(caption) if want_events else []
+    caption_complete, caption_reason = caption_analysis_policy(caption, content_types, places, caption_events)
+    events = caption_events if caption_complete else []
+    notes, observed_text, screen_text, audio_transcripts, rows, images = [], [], [], [], [], []
+    context['counts']['caption_fast_path'] = int(caption_complete)
+    context['counts']['caption_policy_reason'] = caption_reason
+    print(json.dumps({'stage': 'caption_policy', 'skip_ocr': caption_complete,
+                      'reason': caption_reason}), file=sys.stderr, flush=True)
     files = media_files(media_root, post_id)
     route = 'caption'
-    if (want_places and (not places or any(p['needs_review'] for p in places))) or want_events:
+    if caption_complete:
+        context['ocr_rows'] = []  # Completed decision, not missing OCR: never rerun in photo matching.
+        context['counts']['ocr_images'] = 0
+        context['counts']['ocr_skipped'] = 1
+        context.setdefault('timings', {}).update(prepare_media=0, ocr=0, audio=0)
+    if not caption_complete and ((want_places and (not places or any(p['needs_review'] for p in places))) or want_events):
         route = 'media_and_ai'
         with tempfile.TemporaryDirectory(prefix='pinmap-place-') as temp:
             with measure_stage(context, 'prepare_media'):
@@ -1448,8 +1470,12 @@ def extract_link(url, ignore_caption=False, content_types=None):
                     'places': [], 'events': [], 'map_locations': [], 'notes': observed.get('notes', [])}]}
         caption = '' if ignore_caption else observed.get('caption', '')
         candidates = caption_places(caption) if 'place' in types else []
+        caption_complete, _ = caption_analysis_policy(caption, types, candidates)
         notes = observed.get('notes', [])
-        if 'event' in types or ('place' in types and (not candidates or any(p['needs_review'] for p in candidates))):
+        if caption_complete:
+            context.setdefault('counts', {})['media_skipped_due_caption'] = 1
+            context.setdefault('timings', {})['collect_media'] = 0
+        if not caption_complete and ('event' in types or ('place' in types and (not candidates or any(p['needs_review'] for p in candidates)))):
             print('2/3 사진·영상 원본 수집 중...', file=sys.stderr, flush=True)
             with measure_stage(context, 'collect_media'):
                 collected = collect_link(url, 'media', media_root, browser_profile)
@@ -1466,8 +1492,11 @@ def extract_link(url, ignore_caption=False, content_types=None):
         result = extract_one(post, media_root, ignore_caption, types, analysis_context=context)
         media_dir = media_root / observed['post_id']
         with measure_stage(context, 'place_images'):
-            with track_ai_cache(context.setdefault('counts', {})):
-                attach_location_images(result, media_dir, ocr_rows=context.get('ocr_rows'))
+            if not context.get('counts', {}).get('caption_fast_path'):
+                with track_ai_cache(context.setdefault('counts', {})):
+                    attach_location_images(result, media_dir, ocr_rows=context.get('ocr_rows'))
+            # Caption-complete requests keep the collected cover; missing venue photos
+            # continue to use the existing authenticated Google Places photo fallback.
         cover = next((p for p in media_dir.glob('link-cover.*') if p.suffix.lower() in IMAGE_EXT), None)
         if cover and ffmpeg_bin():
             with tempfile.TemporaryDirectory(prefix='pinmap-cover-') as cover_temp:

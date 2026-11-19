@@ -110,3 +110,22 @@ Vercel API 배포 전에 `database/004_content_classification.sql`을 적용해�
 기존 저장 행은 빈 분류값을 유지하며 자동 재분석하지 않습니다. 웹은 새 저장 결과의
 분류값을 사용하고, 분류가 없으면 이전 표시를 유지합니다.
 Cloud Run과 Vercel은 각각 배포하며 플래그를 0으로 바꾸면 Decisions 호출을 끕니다.
+
+## 캡션이 충분한 경우 OCR 생략
+
+`PINMAP_CAPTION_FAST_PATH=1`(기본값)은 캡션에서 요청된 장소·행사 정보가
+충분히 추출되면 추가 원본 수집, 영상 프레임 생성, OCR, 음성 분석과 장소 이미지
+매칭을 생략합니다. 최초 캡션 수집에서 확보한 표지는 유지하며, 장소 사진이 없으면
+기존 Google Places 사진 대체 기능을 사용합니다. 사진 게시물의 최초 HTTP 수집은
+이미 미디어를 내려받았을 수 있으므로 모든 다운로드가 없어지는 것은 아닙니다.
+
+장소는 이름·주소가 있어야 하고, 행사는 이름·명시된 연월일·기간·장소가 필요합니다.
+명시적으로 하루 행사임을 알 수 있는 단일 날짜도 허용하며 연도나 종료일을 추정하지
+않습니다. 목록 수나 번호, 추가 장소 표기가 추출 결과와 맞지 않거나 사진·영상 속
+정보를 보라는 안내가 있으면 기존 미디어 분석을 유지합니다. 생략 판단에는 추가 AI를
+호출하지 않습니다. 제목·요약 생성, Decisions 분류, 지도 검색과 주소 검증은 유지합니다.
+
+`stage=caption_policy` 로그의 `skip_ocr`·`reason`, 응답 `analysis_metrics.counts`의
+`caption_fast_path`·`caption_policy_reason`·`ocr_skipped`·`media_skipped_due_caption`과
+`timings`에서 생략 여부를 확인합니다. 이미 생략한 OCR을 사진 매칭 단계에서 다시
+실행하지 않습니다. `PINMAP_CAPTION_FAST_PATH=0`으로 기존 경로를 복구할 수 있습니다.

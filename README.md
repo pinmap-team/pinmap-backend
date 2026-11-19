@@ -82,3 +82,9 @@ One structured model response supplies missing place/event candidates plus the t
 Google/Naver place searches run with at most four concurrent requests and each unique name/area/keyword tuple is queried once per post. Candidate ranking, result order and review flags remain deterministic. Public fallback geocoding stays sequential and repeated identical addresses are reused. `PINMAP_MAP_LOOKUP_WORKERS=1` restores sequential searches.
 
 Structured `analysis_timing` logs and the extraction response's `analysis_metrics` report collection, preparation, OCR, AI, map search and image matching time, OCR image counts and the selected AI strategy. OCR source text is not duplicated in metrics or written to timing logs. Vercel's saved-content schema does not persist these diagnostics. Deploy and benchmark the Cloud Run image separately from Vercel.
+
+### 팀 테스트 계정 로그인
+
+웹 로그인 화면의 `테스트 계정으로 시작하기`는 `POST /api/auth/test-login`으로 지정된 팀 계정의 실제 Supabase 세션을 발급받습니다. 저장한 콘텐츠는 같은 계정을 사용하는 팀원끼리 공유됩니다. 기존 저장 API의 사용자별 접근 규칙과 추출 제한을 그대로 적용합니다.
+
+서버 환경에 `PINMAP_TEST_LOGIN_ENABLED=true`, `PINMAP_TEST_LOGIN_PASSWORD`를 등록해야 버튼이 표시됩니다. 기존 Supabase URL·공개 키도 필요합니다. 기존 계정으로만 로그인하며 사용자를 생성하거나 비밀번호를 변경하지 않습니다. 비밀번호나 서버 키는 브라우저에 전달하지 않습니다. 테스트 종료 시 플래그를 `false`로 바꿉니다.

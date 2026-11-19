@@ -15,6 +15,7 @@ test('a private local key file is used only when selected', () => {
     assert.equal(getKey('GEMINI_API_KEY', {PINMAP_KEYS_FILE:filename}), 'file-test-key');
     assert.equal(getKey('GEMINI_API_KEY', {PINMAP_KEYS_FILE:filename,GEMINI_API_KEY:'deployed-test-key'}), 'file-test-key');
     assert.throws(() => getKey('NOT_AN_API_KEY', {PINMAP_KEYS_FILE:filename}), /Unknown key name/);
+    assert.throws(() => getKey('GOOGLE_OAUTH_CLIENT_SECRET', {}), /Externally managed/);
     fs.chmodSync(filename, 0o644);
     assert.throws(() => getKey('GEMINI_API_KEY', {PINMAP_KEYS_FILE:filename}), /private file/);
   } finally {

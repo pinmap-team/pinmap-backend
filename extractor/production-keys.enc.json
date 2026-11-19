@@ -34,6 +34,18 @@
       "environment": "GOOGLE_MAPS_SERVER_KEY",
       "comment": "Vercel 서버 전용 Google Places 키. Vercel Secret이어서 원래 값을 조회할 수 없으며 현재 환경 변수를 참조합니다."
     },
+    "GOOGLE_OAUTH_CLIENT_ID": {
+      "source": "external",
+      "managedIn": "Supabase Authentication > Sign In / Providers > Google",
+      "createdIn": "Google Cloud > Google Auth Platform > Clients",
+      "comment": "구글 로그인용 OAuth Client ID입니다. Pinmap 웹은 Supabase에 provider=google로 요청하며 이 값은 Supabase Google 공급자 설정에 보관됩니다. 지도 API 키와 다릅니다."
+    },
+    "GOOGLE_OAUTH_CLIENT_SECRET": {
+      "source": "external",
+      "managedIn": "Supabase Authentication > Sign In / Providers > Google",
+      "createdIn": "Google Cloud > Google Auth Platform > Clients",
+      "comment": "구글 로그인용 OAuth Client Secret입니다. Supabase가 Google 인증에 사용하며 Pinmap 코드나 Vercel 환경 변수에는 넣지 않습니다. 현재 값은 이 저장소에서 확인할 수 없습니다."
+    },
     "GOOGLE_PLACES_API_KEY": {
       "source": "environment",
       "environment": "GOOGLE_PLACES_API_KEY",

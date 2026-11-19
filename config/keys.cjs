@@ -43,6 +43,9 @@ function encryptedKeys(env, payload) {
 function getKey(name, env = process.env) {
   const payload = registry(env);
   const entry = payload.keys[name];
+  if (entry?.source === 'external') {
+    throw new TypeError(`Externally managed credential: ${name}`);
+  }
   if (!entry || !['encrypted', 'environment'].includes(entry.source)) {
     throw new TypeError(`Unknown key name: ${name}`);
   }

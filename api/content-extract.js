@@ -49,7 +49,12 @@ module.exports = async function contentExtract(req, res) {
   if (!token) return res.status(401).json({ error: 'authentication_required' });
   const auth = await authenticatedUser(config, token);
   if (auth.status !== 200) return res.status(auth.status).json({ error: auth.status === 503 ? 'auth_unavailable' : 'authentication_required' });
-  const forwarded = await forwardExtraction(payload);
+  const Billing=require('../lib/billing');
+  let reservation;
+  try{reservation=await Billing.reserve(auth.userId);}catch(error){return res.status(error.status||503).json({error:error.status?error.message:'billing_unavailable'});}
+  let forwarded;
+  try{forwarded=await forwardExtraction(payload);}catch{await Billing.finish(reservation,false);return res.status(503).json({error:'extractor_unavailable'});}
+  await Billing.finish(reservation,forwarded.status===200 && forwarded.body.results?.some(x=>['extracted','needs_review'].includes(x.status)&&!!x.ai_summary));
   return res.status(forwarded.status).json(forwarded.body);
 };
 

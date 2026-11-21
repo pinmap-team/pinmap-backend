@@ -1,3 +1,4 @@
+const Billing = require('../lib/billing');
 const { extractionRequest, extractorConfig, forwardExtraction, instagramLink } = require('./place-extract');
 const { getKey } = require('../config/keys.cjs');
 const { supabaseConfig, bearerToken, authenticatedUser } = require('./content-extract');
@@ -344,7 +345,13 @@ module.exports = async function contentSave(req, res) {
     return res.status(503).json({ error: 'storage_unavailable' });
   }
   if (!extractorConfig()) return res.status(503).json({ error: 'content_extraction_not_configured' });
-  const forwarded = await forwardExtraction(payload, { timeoutMs: 245000 });
+  let reservation;
+  try { reservation=await Billing.reserve(auth.userId); }
+  catch(error){return res.status(error.status||503).json({error:error.status?error.message:'billing_unavailable'});}
+  let forwarded;
+  try { forwarded = await forwardExtraction(payload, { timeoutMs: 245000 }); }
+  catch {await Billing.finish(reservation,false);return res.status(503).json({error:'extractor_unavailable'});}
+
   const result = forwarded.status === 200 && Array.isArray(forwarded.body.results) &&
     forwarded.body.results.length === 1 ? forwarded.body.results[0] : null;
   let row = result && sanitizeReport(result, payload.url, auth.userId);
@@ -358,6 +365,7 @@ module.exports = async function contentSave(req, res) {
     ] }, payload.url, auth.userId);
   }
   const saved = await upsertContent(storage, row);
+  await Billing.finish(reservation, saved.status===200 && ['extracted','needs_review'].includes(row.status) && !!row.ai_summary);
   if (saved.status !== 200) return res.status(saved.status).json({ error: saved.error });
   return res.status(200).json({ item: saved.item, analysis_status: row.status,
     analysis_notes: row.extraction_notes, warnings: row.media_warnings });

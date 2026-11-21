@@ -17,6 +17,8 @@ class DecisionsTests(unittest.TestCase):
     def test_classification_validation_and_failure(self):
         with patch('decisions.call',return_value={'kind':answer('place'),'category':answer('bar')}):
             self.assertEqual(decisions.classify('칵테일 바',SETTINGS)['category'],'bar')
+        with patch('decisions.call',return_value={'kind':answer('unknown'),'category':answer('recipe')}):
+            self.assertEqual(decisions.classify('바질 파스타 조리법',SETTINGS)['category'],'recipe')
         for response in ({'kind':answer('fake'),'category':answer('bar')},
                          {'kind':answer('place'),'category':answer('bar',.2)},
                          {'kind':answer('place'),'category':answer('bar',float('nan'))}):

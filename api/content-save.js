@@ -74,7 +74,7 @@ function classification(value) {
   if (!value || value.source !== 'gemini_decisions' || value.status !== 'classified' ||
       value.model !== 'gemini-decision-1' ||
       !['place', 'event', 'mixed', 'unknown'].includes(value.kind) ||
-      !['restaurant', 'cafe', 'bar', 'exhibition', 'pop_up', 'other'].includes(value.category) ||
+      !['restaurant', 'cafe', 'bar', 'exhibition', 'pop_up', 'travel', 'shopping', 'recipe', 'lifestyle', 'other'].includes(value.category) ||
       !Number.isFinite(value.confidence) || value.confidence < .8 || value.confidence > 1) return {};
   return { source: value.source, status: value.status, model: value.model,
     kind: value.kind, category: value.category, confidence: value.confidence };
@@ -148,7 +148,8 @@ function sanitizeReport(report, sourceUrl, userId) {
   if (report.author_profile_data_url && !profile) warnings.push(warning('profile_image_omitted', '작성자 사진 용량 또는 형식 제한으로 저장하지 못했습니다.'));
   const contentKind = places.length && events.length ? 'mixed' : places.length ? 'place' :
     events.length ? 'event' : 'unknown';
-  const status = contentKind === 'unknown' && ['extracted', 'needs_review'].includes(report.status)
+  const hasSummary = !!optionalText(report.ai_title, 160) && !!optionalText(report.ai_summary, 800);
+  const status = contentKind === 'unknown' && ['extracted', 'needs_review'].includes(report.status) && !hasSummary
     ? 'needs_media_or_ai' : report.status;
   return { user_id: userId, source_url: sourceUrl, content_kind: contentKind,
     classification: classification(report.classification),
@@ -186,7 +187,7 @@ function dataHeaders(config, extra = {}) {
   return { apikey: config.secret, Accept: 'application/json', ...extra };
 }
 
-async function existingContent(config, userId, sourceUrl, fetcher = fetch) {
+async function existingContent(config, userId, sourceUrl, fetcher = fetch, optional = false) {
   const url = new URL('/rest/v1/pinmap_saved_content', config.origin);
   url.searchParams.set('select', SELECT);
   url.searchParams.set('user_id', `eq.${userId}`);
@@ -197,6 +198,7 @@ async function existingContent(config, userId, sourceUrl, fetcher = fetch) {
   });
   if (!response.ok) throw Error('storage_unavailable');
   const items = await limitedJson(response);
+  if (optional && Array.isArray(items) && items.length === 0) return null;
   if (!Array.isArray(items) || items.length !== 1 || items[0]?.user_id !== userId ||
       items[0]?.source_url !== sourceUrl) throw Error('invalid_storage_response');
   return items[0];
@@ -204,6 +206,10 @@ async function existingContent(config, userId, sourceUrl, fetcher = fetch) {
 
 async function upsertContent(config, row, fetcher = fetch) {
   try {
+    if (row.content_kind === 'unknown' && row.status === 'extracted') {
+      const previous = await existingContent(config, row.user_id, row.source_url, fetcher, true);
+      if (previous && previous.content_kind !== 'unknown') return { status: 200, item: previous };
+    }
     const url = new URL('/rest/v1/pinmap_saved_content', config.origin);
     url.searchParams.set('on_conflict', 'user_id,source_url');
     url.searchParams.set('select', SELECT);
@@ -211,7 +217,7 @@ async function upsertContent(config, row, fetcher = fetch) {
       method: 'POST',
       headers: dataHeaders(config, {
         'Content-Type': 'application/json',
-        Prefer: `resolution=${row.content_kind === 'unknown' ? 'ignore-duplicates' : 'merge-duplicates'},return=representation` }),
+        Prefer: `resolution=${row.content_kind === 'unknown' && row.status !== 'extracted' ? 'ignore-duplicates' : 'merge-duplicates'},return=representation` }),
       body: JSON.stringify(row), signal: AbortSignal.timeout(10000)
     });
     if (!response.ok) {
@@ -222,7 +228,7 @@ async function upsertContent(config, row, fetcher = fetch) {
     }
     const records = await limitedJson(response);
     if (!Array.isArray(records) || records.length > 1) throw Error('invalid_storage_response');
-    const item = records[0] || (row.content_kind === 'unknown'
+    const item = records[0] || (row.content_kind === 'unknown' && row.status !== 'extracted'
       ? await existingContent(config, row.user_id, row.source_url, fetcher) : null);
     if (item?.source_url !== row.source_url || item?.user_id !== row.user_id) throw Error('invalid_storage_response');
     return { status: 200, item };

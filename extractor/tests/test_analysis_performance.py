@@ -147,7 +147,7 @@ class AnalysisPerformanceTests(unittest.TestCase):
             title,_=complete_ai_analysis('카페',[],[],[],[],places,events,True,False,notes,{})
         self.assertEqual(title,'카페');self.assertEqual(places[0]['name'],'카페');legacy.assert_called_once()
 
-    def test_summary_only_request_does_not_attach_images_or_reextract_complete_events(self):
+    def test_description_only_request_includes_available_image(self):
         seen=[]
         def requester(request):
             seen.append(json.loads(request.data))
@@ -156,7 +156,8 @@ class AnalysisPerformanceTests(unittest.TestCase):
             p=Path(temp)/'image.jpg';p.write_bytes(b'image')
             parsed,error=analyze_content('전시',[],[{'path':p,'source_file':p.name}],[],[],[],False,False,SETTINGS,requester)
         self.assertIsNone(error);self.assertTrue(parsed)
-        self.assertEqual(len(seen[0]['contents'][0]['parts']),1)
+        self.assertEqual(len(seen[0]['contents'][0]['parts']),3)
+        self.assertIn('inline_data', seen[0]['contents'][0]['parts'][2])
 
     def test_complete_event_roundup_does_not_create_a_redundant_venue_pipeline(self):
         events=[{'title':'행사'+str(i),'start_date':'2026-11-19','venue_name':'미술관'}for i in range(2)]

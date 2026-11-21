@@ -1,5 +1,6 @@
 import io
 import json
+import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
@@ -16,7 +17,7 @@ class PlaceLookupTests(unittest.TestCase):
 
     def test_ai_post_summary_returns_grounded_title_and_detail(self):
         output = {'candidates': [{'finishReason': 'STOP', 'content': {'parts': [
-            {'text': '{"title":"서울 찜질방 11곳", "summary":"따뜻한 탕과 휴식 공간을 모아 소개해요. 서울 여러 지역에서 고를 수 있어요."}'}]}}]}
+            {'text': '{"title":"서울 찜질방 11곳", "summary":"서울 여러 지역의 찜질방에서 따뜻한 탕과 휴식 공간을 소개해요. 게시물은 각 장소의 분위기와 이용할 수 있는 공간을 보여줘요. 방문 전에 장소별 정보를 확인할 수 있어요."}'}]}}]}
         with patch('place_server.ai_settings', return_value={
                 'MULTIUSER_AI_PROVIDER': 'gemini', 'MULTIUSER_MODEL': 'gemini-2.5-flash',
                 'GEMINI_API_KEY': 'test-key'}), \
@@ -24,20 +25,48 @@ class PlaceLookupTests(unittest.TestCase):
             title, summary, error = ai_post_summary('서울 찜질방 추천', [], [{'name': '테스트 스파'}])
         self.assertEqual(title, '서울 찜질방')
         self.assertIn('휴식 공간', summary)
+        self.assertIn('방문 전에', summary)
+        self.assertGreater(len(summary), 80)
         self.assertIsNone(error)
         payload = json.loads(request.call_args.args[0].data)
         self.assertIn('서울 찜질방 추천', payload['contents'][0]['parts'][0]['text'])
+        self.assertIn('3~4문장', payload['contents'][0]['parts'][0]['text'])
+
+    def test_content_description_uses_image_and_audio_evidence(self):
+        output = {'candidates': [{'finishReason': 'STOP', 'content': {'parts': [
+            {'text': '{"title":"전시 산책", "summary":"전시 공간과 작품을 소개해요. 영상에는 작품을 둘러보는 장면이 이어져요. 음성에서는 관람 동선을 설명해요."}'}]}}]}
+        with tempfile.TemporaryDirectory() as folder:
+            image = Path(folder) / 'slide.png'
+            image.write_bytes(b'\x89PNG\r\n\x1a\nimage')
+            with patch('place_server.ai_settings', return_value={
+                    'MULTIUSER_AI_PROVIDER': 'gemini', 'MULTIUSER_MODEL': 'gemini-2.5-flash',
+                    'GEMINI_API_KEY': 'test-key'}), \
+                 patch('place_server.request_json_with_retry', return_value=output) as request:
+                _, description, error = ai_post_summary('', [], [], images=[
+                    {'path': str(image), 'source_file': 'slide.png', 'time_seconds': None}], transcripts=[
+                    {'source_file': 'clip.mp4', 'time_seconds': 4.2,
+                     'text': '관람 동선을 따라 전시를 둘러봅니다.'}])
+        self.assertIsNone(error)
+        self.assertIn('관람 동선', description)
+        payload = json.loads(request.call_args.args[0].data)
+        parts = payload['contents'][0]['parts']
+        self.assertIn('관람 동선을 따라', parts[0]['text'])
+        self.assertTrue(any('inline_data' in part for part in parts))
+        self.assertEqual(payload['generationConfig']['maxOutputTokens'], 800)
 
     def test_long_ai_summary_ends_at_sentence_boundary(self):
         first = '서울 여러 지역의 찜질방에서 탕과 휴식 공간을 즐길 수 있어요.'
         output = {'candidates': [{'finishReason': 'STOP', 'content': {'parts': [
-            {'text': json.dumps({'title': '서울 찜질방', 'summary': first + ' ' + '추가 설명을 여러 번 반복합니다. ' * 5}, ensure_ascii=False)}]}}]}
+            {'text': json.dumps({'title': '서울 찜질방', 'summary': first + ' ' + '추가 설명을 여러 번 반복합니다. ' * 30}, ensure_ascii=False)}]}}]}
         with patch('place_server.ai_settings', return_value={
                 'MULTIUSER_AI_PROVIDER': 'gemini', 'MULTIUSER_MODEL': 'gemini-2.5-flash',
                 'GEMINI_API_KEY': 'test-key'}), \
              patch('place_server.request_json_with_retry', return_value=output):
             _, summary, error = ai_post_summary('', [], [])
-        self.assertEqual(summary, first)
+        self.assertTrue(summary.startswith(first))
+        self.assertIn('추가 설명', summary)
+        self.assertLessEqual(len(summary), 500)
+        self.assertTrue(summary.endswith('합니다.'))
         self.assertIsNone(error)
 
     def test_equivalent_address_format_keeps_google_place_coordinates(self):

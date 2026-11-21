@@ -6,9 +6,11 @@ module.exports=async(req,res)=>{
   const c=B.config(),uid=await B.user(c,req);if(!uid)return res.status(401).json({error:'authentication_required'});
   const rows=await B.subscriptions(c,uid),s=rows.find(x=>B.entitlement(x))||rows[0];
   if(req.method==='GET'){
-   let used=0;
-   if(s?.period_start){const usage=await B.db(c,'pinmap_analysis_usage?select=id&user_id=eq.'+uid+'&subscription_id=eq.'+s.subscription_id+'&period_start=eq.'+encodeURIComponent(s.period_start)+'&state=eq.completed&limit=301');used=usage.length;}
-   return res.status(200).json({environment:c.environment,active:B.entitlement(s),status:s?.status||'free',periodEnd:s?.period_end||null,cancelAt:s?.cancel_at||null,monthlyLimit:300,used,remaining:Math.max(0,300-used)});
+   const active=B.entitlement(s);
+   let usage;
+   if(active){const rows=await B.db(c,'pinmap_analysis_usage?select=id&user_id=eq.'+uid+'&subscription_id=eq.'+s.subscription_id+'&period_start=eq.'+encodeURIComponent(s.period_start)+'&state=eq.completed&limit=301');usage={monthlyLimit:300,used:rows.length,remaining:Math.max(0,300-rows.length)};}
+   else usage=await B.db(c,'rpc/pinmap_free_analysis_status',{p_user_id:uid});
+   return res.status(200).json({environment:c.environment,active,status:active?s.status:'free',periodEnd:active?s.period_end:null,cancelAt:active?s.cancel_at:null,...usage});
   }
   const body=typeof req.body==='string'?JSON.parse(req.body):req.body;
   if(body?.action==='portal'){

@@ -14,6 +14,15 @@ test('paid access requires active subscription, matching paid period, and future
  assert(B.entitlement(s,now));
  for(const change of [{status:'canceled'},{status:'past_due'},{status:'paused'},{paid_until:null},{paid_until:'2026-12-20'},{period_end:'2026-11-20'},{period_start:'2026-11-22'}])assert(!B.entitlement({...s,...change},now));
 });
+test('account status reads the free monthly quota for accounts without an active plan',async()=>{
+ const routes=[];
+ const mock={config:()=>({environment:'sandbox'}),user:async()=>uid,subscriptions:async()=>[],entitlement:()=>false,
+ db:async(c,path)=>{routes.push(path);return {monthlyLimit:50,used:12,remaining:38};}};
+ const handler=load('api/billing/account.js',{'../../lib/billing':mock});const res=response();
+ await handler({method:'GET'},res);
+ assert.equal(res.code,200);assert.equal(res.body.status,'free');assert.equal(res.body.remaining,38);
+ assert.equal(routes[0],'rpc/pinmap_free_analysis_status');
+});
 function load(path,mocks){const exports={};const c={module:{exports},exports,require:name=>mocks[name],Buffer,process:{env:{PADDLE_WEBHOOK_SECRET:'secret'}}};vm.runInNewContext(fs.readFileSync(path,'utf8'),c);return c.module.exports;}
 function response(){return {code:null,body:null,setHeader(){},status(code){this.code=code;return this;},json(body){this.body=body;return this;},end(){return this;}};}
 const uid='12345678-1234-1234-1234-123456789012',nonce='12345678-1234-1234-1234-123456789099',sub='sub_'+'s'.repeat(26),txn='txn_'+'t'.repeat(26),price='pri_'+'p'.repeat(26),customer='ctm_'+'c'.repeat(26);

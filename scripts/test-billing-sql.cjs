@@ -1,7 +1,18 @@
 const {PGlite}=require(process.env.PINMAP_PGLITE_MODULE || '@electric-sql/pglite');const fs=require('fs');const assert=require('assert/strict');
 (async()=>{const db=new PGlite();await db.exec(`create role anon;create role authenticated;create role service_role;create schema auth;create table auth.users(id uuid primary key);create schema pinmap_private;create table public.pinmap_saved_content(user_id uuid,source_url text);`);
 await db.exec(fs.readFileSync('database/005_billing.sql','utf8'));
+await db.exec(fs.readFileSync('database/006_free_monthly_analysis.sql','utf8'));
 const user='12345678-1234-1234-1234-123456789012';await db.query('insert into auth.users values ($1)',[user]);
+const freeUser='12345678-1234-1234-1234-123456789013';await db.query('insert into auth.users values ($1)',[freeUser]);
+const freeReservations=await Promise.all(Array.from({length:51},()=>db.query('select public.pinmap_reserve_analysis($1,$2) result',[freeUser,'sandbox'])));
+assert.equal(freeReservations.filter(x=>x.rows[0].result.allowed).length,50);
+assert.equal(freeReservations[50].rows[0].result.error,'free_monthly_analysis_limit');
+await db.query('select public.pinmap_finish_analysis($1,false)',[freeReservations[0].rows[0].result.reservation_id]);
+const freeRetry=(await db.query('select public.pinmap_reserve_analysis($1,$2) result',[freeUser,'sandbox'])).rows[0].result;assert(freeRetry.allowed);
+await db.query('select public.pinmap_finish_analysis($1,true)',[freeRetry.reservation_id]);
+assert.equal((await db.query('select public.pinmap_free_analysis_status($1) result',[freeUser])).rows[0].result.used,1);
+await db.query("insert into public.pinmap_free_analysis_usage(user_id,month_kst,state) values ($1,(date_trunc('month',now() at time zone 'Asia/Seoul')-interval '1 month')::date,'completed')",[freeUser]);
+assert.equal((await db.query('select public.pinmap_free_analysis_status($1) result',[freeUser])).rows[0].result.used,1);
 const s={subscription_id:'sub_test',user_id:user,customer_id:'ctm_test',environment:'sandbox',status:'active',price_id:'pri_test',period_start:new Date(Date.now()-86400000).toISOString(),period_end:new Date(Date.now()+86400000*29).toISOString(),paid_until:new Date(Date.now()+86400000*29).toISOString(),provider_updated_at:new Date().toISOString()};
 async function apply(id,snapshot){return (await db.query('select public.pinmap_apply_billing_event($1,$2::jsonb) result',[id,JSON.stringify(snapshot)])).rows[0].result;}
 const checkout=(await db.query('select pinmap_begin_checkout($1,$2) result',[user,'sandbox'])).rows[0].result;
@@ -15,9 +26,9 @@ const r=reservations[0].rows[0].result.reservation_id;await db.query('select pub
 await db.query('select public.pinmap_finish_analysis($1,true)',[freed.reservation_id]);assert.equal((await db.query("select count(*)::int n from pinmap_analysis_usage where state='completed'")).rows[0].n,1);
 const end=new Date(Date.now()+86400000*60).toISOString();await apply('renew',{...s,period_start:s.period_end,period_end:end,paid_until:end,provider_updated_at:new Date(Date.now()+1000).toISOString()});
 // Future billing period cannot grant early access.
-assert.equal((await db.query('select public.pinmap_reserve_analysis($1,$2) result',[user,'sandbox'])).rows[0].result.error,'subscription_inactive');
+assert.equal((await db.query('select public.pinmap_reserve_analysis($1,$2) result',[user,'sandbox'])).rows[0].result.allowed,true);
 await apply('renew-now',{...s,period_start:new Date(Date.now()-1000).toISOString(),period_end:end,paid_until:end,provider_updated_at:new Date(Date.now()+2000).toISOString()});assert((await db.query('select public.pinmap_reserve_analysis($1,$2) result',[user,'sandbox'])).rows[0].result.allowed);
 await apply('refund',{...s,provider_updated_at:new Date(Date.now()+3000).toISOString(),revoked_until:end});
-assert.equal((await db.query('select public.pinmap_reserve_analysis($1,$2) result',[user,'sandbox'])).rows[0].result.error,'subscription_inactive');
+assert.equal((await db.query('select public.pinmap_reserve_analysis($1,$2) result',[user,'sandbox'])).rows[0].result.allowed,true);
 await db.exec('set role authenticated');await assert.rejects(()=>db.query('select * from pinmap_subscriptions'));await assert.rejects(()=>db.query('select pinmap_reserve_analysis($1,$2)',[user,'sandbox']));
 console.log('SQL PASS: migration, 301 overlapping reservations, failure release, completion, renewal, replay/order, access controls');await db.close();})().catch(e=>{console.error(e);process.exit(1)});

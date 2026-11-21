@@ -138,6 +138,8 @@ Cloud Run과 Vercel은 각각 배포하며 플래그를 0으로 바꾸면 Decisi
 
 `database/005_billing.sql`은 checkout intent, 구독, 웹훅 중복 방지, 사용량 예약과 서비스 역할 전용 RPC를 추가합니다. `/api/billing/account`는 인증된 계정의 checkout transaction, 구독 상태·사용량, 고객 포털을 제공합니다. `/api/billing/webhook`은 원본 바이트의 서명과 Paddle API 결제·구독·checkout binding을 검증하며 브라우저 이벤트만으로 권한을 부여하지 않습니다.
 
+`database/006_free_monthly_analysis.sql`은 무료 계정에 서울 날짜 기준 월 50회의 성공한 콘텐츠 분석 한도를 추가합니다. `005_billing.sql` 뒤에 적용해야 하며, 실패한 분석 예약은 반환됩니다. 계정 조회 API는 무료 사용량과 남은 횟수를 반환합니다.
+
 서버 환경: `PADDLE_BILLING_ENABLED=1`, `PADDLE_ENVIRONMENT=sandbox`, `PADDLE_MONTHLY_PRICE_ID`, `PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`. 키는 Vercel 서버 환경에만 저장합니다. 웹훅 destination은 `https://pinmap-backend.vercel.app/api/billing/webhook`이며 transaction.completed, subscription lifecycle, adjustment 이벤트를 구독합니다. 기존 익명 테스트 결제는 사용자 계정에 자동 귀속하지 않습니다.
 
 SQL 회귀 검증: 임시 경로의 `@electric-sql/pglite`를 사용하여 `PINMAP_PGLITE_MODULE=/tmp/pinmap-billing-sql-check/node_modules/@electric-sql/pglite node scripts/test-billing-sql.cjs`. 301개 중복 예약의 한도, 실패 반환, 갱신·환불·이벤트 순서·접근 권한을 검사합니다.

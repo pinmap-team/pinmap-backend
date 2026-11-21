@@ -8,7 +8,7 @@ RUN python3 -m venv /opt/pinmap-python \
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY *.py collect_link.mjs ./
+COPY *.py collect_link.mjs categories.json ./
 COPY production-keys.enc.json ./
 COPY collector ./collector
 RUN mkdir -p /app/data/media \

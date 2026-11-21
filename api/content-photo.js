@@ -7,8 +7,8 @@ module.exports=async(req,res)=>{
  if(req.method!=='POST'){res.setHeader('Allow','POST');return res.status(405).json({error:'method_not_allowed'});}
  let body;try{body=typeof req.body==='string'?JSON.parse(req.body):req.body;}catch{}
  if(!UUID.test(body?.content_id||'')||!Number.isInteger(body?.location_index)||body.location_index<0||body.location_index>=40)return res.status(400).json({error:'invalid_request'});
- const config=supabaseConfig(),storage=store.config(),key=getKey('GOOGLE_MAPS_SERVER_KEY');
- if(!config||!storage||!key)return res.status(503).json({error:'photo_not_configured'});
+ const config=supabaseConfig(),storage=store.config();
+ if(!config||!storage)return res.status(503).json({error:'photo_not_configured'});
  const token=bearerToken(req.headers.authorization);if(!token)return res.status(401).json({error:'authentication_required'});
  const auth=await authenticatedUser(config,token);if(auth.status!==200)return res.status(auth.status).json({error:'authentication_required'});
  try{
@@ -16,6 +16,9 @@ module.exports=async(req,res)=>{
   if(!row||row.user_id!==auth.userId)return res.status(404).json({error:'not_found'});
   const loc=row.map_locations?.[body.location_index];if(!loc)return res.status(404).json({error:'not_found'});
   if(loc.image_data_url)return res.status(200).json({source:'post',url:loc.image_data_url,attributions:[]});
+  if(row.cover_data_url)return res.status(200).json({source:'post',url:row.cover_data_url,attributions:[]});
+  const key=getKey('GOOGLE_MAPS_SERVER_KEY');
+  if(!key)return res.status(503).json({error:'photo_not_configured'});
   const {getGooglePlacePhoto,validPlaceId}=await import('../lib/google-place-photo.mjs');
   const photo=await getGooglePlacePhoto(loc,{key});
   if(!photo)return res.status(404).json({error:'photo_not_found'});

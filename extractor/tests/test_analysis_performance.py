@@ -51,6 +51,77 @@ class AnalysisPerformanceTests(unittest.TestCase):
                 attach_location_images({'map_locations':[{'name':'카페'}]},root,ocr_rows=[])
             runner.assert_not_called()
 
+    def test_carousel_slide_with_visible_name_becomes_cover_even_if_name_repeats(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            for name in ('link-slide-01.jpg','link-slide-02.jpg'):
+                (root/name).write_bytes(b'carousel')
+            result={'map_locations':[{'name':'리니어 카페','evidence':{'kind':'caption','file':None}}]}
+            def convert(command,**kwargs):
+                Path(command[-1]).write_bytes(b'photo')
+                return SimpleNamespace(returncode=0)
+            rows=[{'source_file':name,'time_seconds':None,'lines':['리니어 카페']} for name in ('link-slide-01.jpg','link-slide-02.jpg')]
+            with patch('place_server.ffmpeg_bin',return_value='ffmpeg'), \
+                 patch('place_server.subprocess.run',side_effect=convert), \
+                 patch('place_server.ai_match_location_images') as ai:
+                attach_location_images(result,root,ocr_rows=rows)
+            self.assertEqual(result['map_locations'][0]['image_source_file'],'link-slide-01.jpg')
+            ai.assert_not_called()
+
+    def test_carousel_slide_takes_priority_over_audio_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            (root/'link-slide-03.jpg').write_bytes(b'carousel')
+            (root/'video.mp4').write_bytes(b'video')
+            result={'map_locations':[{'name':'노즈커피','evidence':{'kind':'audio','file':'video.mp4','time_seconds':2}}]}
+            def convert(command,**kwargs):
+                Path(command[-1]).write_bytes(b'photo')
+                return SimpleNamespace(returncode=0)
+            rows=[{'source_file':'link-slide-03.jpg','time_seconds':None,'lines':['노즈커피']}]
+            with patch('place_server.ffmpeg_bin',return_value='ffmpeg'), \
+                 patch('place_server.subprocess.run',side_effect=convert), \
+                 patch('place_server.ai_match_location_images') as ai:
+                attach_location_images(result,root,ocr_rows=rows)
+            self.assertEqual(result['map_locations'][0]['image_source_file'],'link-slide-03.jpg')
+            ai.assert_not_called()
+
+    def test_carousel_name_match_tolerates_one_ocr_character_error(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            (root/'link-slide-11.jpg').write_bytes(b'carousel')
+            result={'map_locations':[{'name':'탕 컨템포러리 아트 서울','evidence':{}}]}
+            rows=[{'source_file':'link-slide-11.jpg','time_seconds':None,
+                   'lines':['10.17 ~ 11.21 / 강남탕 컨템포러리 아틀 서울']}]
+            def convert(command,**kwargs):
+                Path(command[-1]).write_bytes(b'photo')
+                return SimpleNamespace(returncode=0)
+            with patch('place_server.ffmpeg_bin',return_value='ffmpeg'), \
+                 patch('place_server.subprocess.run',side_effect=convert), \
+                 patch('place_server.ai_match_location_images') as ai:
+                attach_location_images(result,root,ocr_rows=rows)
+            self.assertEqual(result['map_locations'][0]['image_source_file'],'link-slide-11.jpg')
+            ai.assert_not_called()
+
+    def test_nine_carousel_covers_fit_the_database_image_budget(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            locations=[]
+            for number in range(1,10):
+                name='link-slide-%02d.jpg'%number
+                (root/name).write_bytes(b'carousel')
+                locations.append({'name':'카페 %d'%number,'evidence':{'kind':'image','file':name}})
+            def convert(command,**kwargs):
+                width=int(command[command.index('-vf')+1].split('=')[1].split(':')[0])
+                Path(command[-1]).write_bytes(b'A'*(60000 if width==320 else 40000 if width==240 else 25000))
+                return SimpleNamespace(returncode=0)
+            result={'map_locations':locations}
+            with patch('place_server.ffmpeg_bin',return_value='ffmpeg'), \
+                 patch('place_server.subprocess.run',side_effect=convert):
+                attach_location_images(result,root,ocr_rows=[])
+            images=[loc.get('image_data_url') for loc in locations]
+            self.assertTrue(all(images))
+            self.assertLessEqual(sum(map(len,images)),480000)
+
     def test_one_model_request_returns_places_events_and_summary(self):
         caption='겨울 전시\n2026.11.15 ~ 2026.12.20\n장소: 문화관'
         bundle={'title':'겨울 전시 2곳','summary':'문화관의 겨울 전시를 소개해요. 작품을 감상할 수 있어요.',

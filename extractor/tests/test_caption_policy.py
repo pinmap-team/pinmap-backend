@@ -63,6 +63,26 @@ class CaptionPolicyTests(unittest.TestCase):
         self.assertEqual(collector.call_count,1);photos.assert_not_called()
         self.assertEqual(result['analysis_metrics']['counts']['media_skipped_due_caption'],1)
         self.assertEqual(result['analysis_metrics']['timings']['ocr'],0)
+    def test_complete_place_caption_still_collects_carousel_for_covers(self):
+        calls=[]
+        def collect(url,mode,root,profile):
+            calls.append(mode)
+            folder=root/'ig_Test123';folder.mkdir(parents=True,exist_ok=True)
+            if mode=='media':(folder/'link-slide-01.jpg').write_bytes(b'carousel')
+            return {'status':'collected','post_id':'ig_Test123','source_url':url,'caption':PLACE,'notes':[]}
+        def locate(places,caption):
+            for place in places:place['coordinates']={'lat':37.5,'lng':126.9}
+            return []
+        with patch('place_server.collect_link',side_effect=collect), \
+             patch('place_server.resolve_missing_addresses',side_effect=locate), \
+             patch('place_server.complete_ai_analysis',return_value=('카페 모래','소개')), \
+             patch('place_server.classify_content',return_value={'source':'rules'}), \
+             patch('place_server.attach_location_images') as photos:
+            result=extract_link('https://www.instagram.com/p/Test123/',content_types=['place'])['results'][0]
+        self.assertEqual(calls,['caption','media'])
+        photos.assert_called_once()
+        self.assertEqual(photos.call_args.kwargs['ocr_rows'],[])
+        self.assertEqual(len(result['map_locations']),1)
     def test_ignore_caption_cannot_enable_fast_path(self):
         with patch('place_server.media_files',return_value=[]), \
              patch('place_server.prepare_images',return_value=([],[])), \

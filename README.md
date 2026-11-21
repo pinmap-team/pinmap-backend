@@ -155,3 +155,9 @@ SQL 회귀 검증: 임시 경로의 `@electric-sql/pglite`를 사용하여 `PINM
 운영 제품 `pro_01m7zvyj8pzczmz0gbgpdddxbg`, 가격 `pri_01m7zw038c1rh0yd7d84v7vm4b`는 월 KRW 5000/세금 포함/수량 1/체험 기간 없음으로 생성하고 API에서 확인했습니다. 웹훅은 `ntfset_01m7zwbt5yq9cz6wq3jvb5drae`이며 `.../api/billing/webhook?environment=live`로 전달됩니다. 명시적 환경별 비밀키로 서명과 Paddle API 계정을 검증합니다. 쿼리 없는 기존 웹훅은 샌드박스로 처리합니다.
 
 현재 계정 인증 및 도메인 승인이 완료되지 않아 공개 환경은 샌드박스로 유지합니다. 승인을 확인한 후에만 활성 환경을 live로 전환합니다. 실제 청구는 수행하지 않았습니다.
+
+### 2026-11-22 운영 결제 활성화
+
+Paddle 운영 대시보드의 계정 인증 `Complete / You're verified`와 앞서 승인된 체크아웃 도메인을 확인한 뒤 `PADDLE_ENVIRONMENT=live`로 전환했습니다. 운영 기본 결제 링크는 `https://pinmap-prototype.vercel.app/checkout.html`입니다. 활성 환경의 운영용 API 키·공개 토큰·월간 가격·웹훅 비밀키를 사용하며, 기존 샌드박스 키와 구독은 별도 환경으로 보존합니다. 더미 프로토타입은 샌드박스를 유지합니다.
+
+실제 카드 결제 제출은 하지 않습니다. 이 배포 후 공개 설정의 live 환경과 로그인 계정의 KRW 5000 월간 체크아웃을 확인합니다.

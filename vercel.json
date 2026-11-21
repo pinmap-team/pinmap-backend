@@ -1,6 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
+    "api/billing/webhook.js": {
+      "maxDuration": 60
+    },
+    "api/billing/account.js": {
+      "maxDuration": 60
+    },
     "api/place-extract.js": {
       "maxDuration": 300
     },

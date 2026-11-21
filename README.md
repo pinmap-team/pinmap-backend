@@ -131,3 +131,13 @@ Cloud Run과 Vercel은 각각 배포하며 플래그를 0으로 바꾸면 Decisi
 `caption_fast_path`·`caption_policy_reason`·`ocr_skipped`·`media_skipped_due_caption`과
 `timings`에서 생략 여부를 확인합니다. 이미 생략한 OCR을 사진 매칭 단계에서 다시
 실행하지 않습니다. `PINMAP_CAPTION_FAST_PATH=0`으로 기존 경로를 복구할 수 있습니다.
+
+## Paddle 샌드박스 월간 이용권
+
+월 5,000원, 결제 주기마다 성공한 콘텐츠 분석 300개를 제공합니다. 실패한 분석은 예약을 반환하고 남은 횟수는 이월하지 않습니다. 무료 계정의 기존 정책은 유지합니다.
+
+`database/005_billing.sql`은 checkout intent, 구독, 웹훅 중복 방지, 사용량 예약과 서비스 역할 전용 RPC를 추가합니다. `/api/billing/account`는 인증된 계정의 checkout transaction, 구독 상태·사용량, 고객 포털을 제공합니다. `/api/billing/webhook`은 원본 바이트의 서명과 Paddle API 결제·구독·checkout binding을 검증하며 브라우저 이벤트만으로 권한을 부여하지 않습니다.
+
+서버 환경: `PADDLE_BILLING_ENABLED=1`, `PADDLE_ENVIRONMENT=sandbox`, `PADDLE_MONTHLY_PRICE_ID`, `PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`. 키는 Vercel 서버 환경에만 저장합니다. 웹훅 destination은 `https://pinmap-backend.vercel.app/api/billing/webhook`이며 transaction.completed, subscription lifecycle, adjustment 이벤트를 구독합니다. 기존 익명 테스트 결제는 사용자 계정에 자동 귀속하지 않습니다.
+
+SQL 회귀 검증: 임시 경로의 `@electric-sql/pglite`를 사용하여 `PINMAP_PGLITE_MODULE=/tmp/pinmap-billing-sql-check/node_modules/@electric-sql/pglite node scripts/test-billing-sql.cjs`. 301개 중복 예약의 한도, 실패 반환, 갱신·환불·이벤트 순서·접근 권한을 검사합니다.

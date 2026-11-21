@@ -141,3 +141,9 @@ Cloud Run과 Vercel은 각각 배포하며 플래그를 0으로 바꾸면 Decisi
 서버 환경: `PADDLE_BILLING_ENABLED=1`, `PADDLE_ENVIRONMENT=sandbox`, `PADDLE_MONTHLY_PRICE_ID`, `PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`. 키는 Vercel 서버 환경에만 저장합니다. 웹훅 destination은 `https://pinmap-backend.vercel.app/api/billing/webhook`이며 transaction.completed, subscription lifecycle, adjustment 이벤트를 구독합니다. 기존 익명 테스트 결제는 사용자 계정에 자동 귀속하지 않습니다.
 
 SQL 회귀 검증: 임시 경로의 `@electric-sql/pglite`를 사용하여 `PINMAP_PGLITE_MODULE=/tmp/pinmap-billing-sql-check/node_modules/@electric-sql/pglite node scripts/test-billing-sql.cjs`. 301개 중복 예약의 한도, 실패 반환, 갱신·환불·이벤트 순서·접근 권한을 검사합니다.
+
+### 운영 환경 전환
+
+`GET /api/billing/config`는 서버에서 활성화한 환경과 브라우저용 공개 토큰·가격 ID만 반환합니다. `PADDLE_CLIENT_TOKEN`은 샌드박스에서 `test_`, 운영에서 `live_` 토큰을 사용합니다. API 키의 환경도 일치해야 합니다. 로그인 앱의 구독·사용량은 활성 환경으로 필터링하며 기존 샌드박스 구독을 운영 이용권으로 전환하지 않습니다.
+
+운영 계정과 체크아웃 도메인의 승인, 운영 제품·KRW 5000/월/세금 포함 가격, 운영 API 키와 공개 토큰·웹훅 비밀키가 준비된 뒤 서버 설정을 함께 전환해야 합니다. `https://pinmap-prototype.vercel.app/checkout.html`은 서버 활성 환경을 사용하고 `?mode=prototype`은 테스트 환경을 사용합니다. 현재 운영 계정 로그인·승인 여부는 확인 전이며 실제 청구는 수행하지 않았습니다.

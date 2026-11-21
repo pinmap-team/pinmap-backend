@@ -26,10 +26,10 @@ module.exports=async(req,res)=>{
    if(!intent.transaction_id)return res.status(409).json({error:'checkout_pending'});
    const previous=await B.paddle(c,'/transactions/'+intent.transaction_id);
    if(!['draft','ready'].includes(previous.status))return res.status(409).json({error:'payment_verification_pending'});
-   return res.status(200).json({transactionId:previous.id});
+   return res.status(200).json({transactionId:previous.id,environment:c.environment});
   }
   const txn=await B.paddle(c,'/transactions',{items:[{price_id:c.price,quantity:1}],collection_mode:'automatic',custom_data:{pinmap_checkout:intent.id}});
   await B.db(c,'pinmap_billing_checkouts?id=eq.'+intent.id,{transaction_id:txn.id},'PATCH');
-  return res.status(200).json({transactionId:txn.id});
+  return res.status(200).json({transactionId:txn.id,environment:c.environment});
  }catch(e){return res.status(503).json({error:['billing_not_configured','plan_configuration_mismatch'].includes(e.message)?e.message:'billing_unavailable'});}
 };

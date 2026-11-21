@@ -50,3 +50,11 @@ test('approved full refund revokes the paid period while partial refund does not
  assert.equal((await send()).code,200);assert.equal(applied.p_subscription.revoked_until,'2026-12-21T00:00:00.000Z');
  total='100';applied=null;assert.equal((await send()).code,200);assert.equal(applied,null);
 });
+test('public billing configuration rejects mixed environments and never returns server secrets',()=>{
+ const env={PADDLE_BILLING_ENABLED:'1',PADDLE_ENVIRONMENT:'live',PADDLE_MONTHLY_PRICE_ID:price,PADDLE_API_KEY:'pdl_live_apikey_private',PADDLE_CLIENT_TOKEN:'live_public',PADDLE_WEBHOOK_SECRET:'secret-signature',SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'sb_publishable_example',SUPABASE_SECRET_KEY:'server-secret'};
+ const result=B.publicConfig(env);assert.deepEqual(result,{environment:'live',clientToken:'live_public',monthlyPriceId:price});
+ assert(!JSON.stringify(result).includes('private'));assert(!JSON.stringify(result).includes('secret'));
+ assert.throws(()=>B.publicConfig({...env,PADDLE_CLIENT_TOKEN:'test_wrong'}));
+ assert.throws(()=>B.publicConfig({...env,PADDLE_API_KEY:'pdl_sdbx_apikey_wrong'}));
+ assert.throws(()=>B.publicConfig({...env,PADDLE_BILLING_ENABLED:'0'}));
+});

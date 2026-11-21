@@ -1,17 +1,16 @@
 """Bounded classification and ambiguous-map validation, with explicit fallbacks."""
 import json
 import math
+import re
+import unicodedata
 import time
 import urllib.request
 
 MODEL = 'gemini-decision-1'
-CATEGORIES = {'restaurant': 'Restaurant or meal recommendation', 'cafe': 'Coffee shop or bakery',
-              'bar': 'Cocktail bar or pub', 'exhibition': 'Art or museum exhibition',
-              'pop_up': 'Temporary brand pop-up store', 'travel': 'Travel, sightseeing or accommodation',
-              'shopping': 'Product, fashion or shopping recommendation',
-              'recipe': 'Cooking instructions or food recipe',
-              'lifestyle': 'Home, hobbies or practical everyday information',
-              'other': 'Other topic or insufficient evidence'}
+from pathlib import Path
+_CATEGORY_CATALOG = json.loads((Path(__file__).resolve().parent / 'categories.json').read_text())
+CATEGORIES = {c['id']: c['description'] for c in _CATEGORY_CATALOG}
+LABELS = {c['id']: c['label'] for c in _CATEGORY_CATALOG}
 KINDS = {'place': 'Physical venues without a temporary event', 'event': 'Temporary exhibition, pop-up or event',
          'mixed': 'Independent venue recommendations AND events; an event venue alone is not mixed',
          'unknown': 'Neither a specific venue nor an event is supported'}
@@ -66,7 +65,8 @@ def classify(text, settings):
         if not kind or not category:
             return {'source': 'rules', 'status': 'low_confidence'}
         return {'source': 'gemini_decisions', 'model': MODEL, 'status': 'classified',
-                'kind': kind[0], 'category': category[0], 'confidence': min(kind[1], category[1])}
+                'kind': kind[0], 'category': category[0], 'label': LABELS[category[0]],
+                'confidence': min(kind[1], category[1])}
     except Exception:
         return {'source': 'rules', 'status': 'unavailable'}
 

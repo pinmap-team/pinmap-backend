@@ -15,13 +15,13 @@ class DecisionsTests(unittest.TestCase):
             self.assertEqual(decisions.verify_maps([{'id':'venue_0','candidates':[]}],SETTINGS),{})
         call.assert_not_called()
     def test_classification_validation_and_failure(self):
-        with patch('decisions.call',return_value={'kind':answer('place'),'category':answer('bar')}):
-            self.assertEqual(decisions.classify('칵테일 바',SETTINGS)['category'],'bar')
+        with patch('decisions.call',return_value={'kind':answer('place'),'category':answer('food')}):
+            self.assertEqual(decisions.classify('칵테일 바',SETTINGS)['category'],'food')
         with patch('decisions.call',return_value={'kind':answer('unknown'),'category':answer('recipe')}):
             self.assertEqual(decisions.classify('바질 파스타 조리법',SETTINGS)['category'],'recipe')
-        for response in ({'kind':answer('fake'),'category':answer('bar')},
-                         {'kind':answer('place'),'category':answer('bar',.2)},
-                         {'kind':answer('place'),'category':answer('bar',float('nan'))}):
+        for response in ({'kind':answer('fake'),'category':answer('food')},
+                         {'kind':answer('place'),'category':answer('food',.2)},
+                         {'kind':answer('place'),'category':answer('food',float('nan'))}):
             with patch('decisions.call',return_value=response):
                 self.assertEqual(decisions.classify('주점',SETTINGS)['source'],'rules')
         with patch('decisions.call',side_effect=TimeoutError):
@@ -92,3 +92,13 @@ class DecisionsTests(unittest.TestCase):
         self.assertEqual(result['verification_candidates'][0]['name'],'SCARF')
         self.assertEqual(result['status'],'ambiguous')
 if __name__=='__main__': unittest.main()
+
+
+class CategoryCatalogTests(unittest.TestCase):
+    def test_all_24_categories_are_supported(self):
+        self.assertEqual(len(decisions.CATEGORIES), 24)
+        for category, label in decisions.LABELS.items():
+            with patch('decisions.call', return_value={'kind':answer('unknown'),'category':answer(category)}):
+                result=decisions.classify('게시물의 핵심 내용', SETTINGS)
+                self.assertEqual(result['category'], category)
+                self.assertEqual(result['label'], label)

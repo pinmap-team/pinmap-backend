@@ -70,14 +70,15 @@ function evidence(value) {
     time_seconds: Number.isFinite(seconds) && seconds >= 0 && seconds <= 36000 ? seconds : null };
 }
 
+const CATEGORY_CATALOG = require('../categories.json');
 function classification(value) {
+  const category = CATEGORY_CATALOG.find(c=>c.id===value?.category || c.aliases.includes(value?.category));
   if (!value || value.source !== 'gemini_decisions' || value.status !== 'classified' ||
-      value.model !== 'gemini-decision-1' ||
-      !['place', 'event', 'mixed', 'unknown'].includes(value.kind) ||
-      !['restaurant', 'cafe', 'bar', 'exhibition', 'pop_up', 'travel', 'shopping', 'recipe', 'lifestyle', 'other'].includes(value.category) ||
+      value.model !== 'gemini-decision-1' || !category ||
+      !['place','event','mixed','unknown'].includes(value.kind) ||
       !Number.isFinite(value.confidence) || value.confidence < .8 || value.confidence > 1) return {};
-  return { source: value.source, status: value.status, model: value.model,
-    kind: value.kind, category: value.category, confidence: value.confidence };
+  return {source:value.source,status:value.status,model:value.model,kind:value.kind,
+    category:category.id,label:category.label,confidence:value.confidence};
 }
 
 function sanitizeReport(report, sourceUrl, userId) {

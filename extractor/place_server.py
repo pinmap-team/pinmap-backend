@@ -1579,6 +1579,62 @@ def extract_link(url, ignore_caption=False, content_types=None):
                 'input': 'instagram_link', 'results': [result]}
 
 
+def extract_capture(request):
+    """Analyze one uploaded screenshot without attempting Instagram collection."""
+    if not isinstance(request, dict) or set(request) != {'url', 'image_data_url', 'content_types'}:
+        raise ValueError('캡처 요청 형식이 올바르지 않습니다.')
+    url = request['url']
+    if not isinstance(url, str) or not re.fullmatch(
+            r'pinmap://capture/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', url):
+        raise ValueError('캡처 식별자가 올바르지 않습니다.')
+    if request['content_types'] != ['place', 'event']:
+        raise ValueError('캡처 분석 유형이 올바르지 않습니다.')
+    encoded = request['image_data_url']
+    if not isinstance(encoded, str) or not re.fullmatch(r'data:image/jpeg;base64,[A-Za-z0-9+/]+={0,2}', encoded) or len(encoded) > 2800000:
+        raise ValueError('JPEG 캡처 이미지가 필요합니다.')
+    try:
+        data = base64.b64decode(encoded.split(',', 1)[1], validate=True)
+    except ValueError as exc:
+        raise ValueError('캡처 이미지 인코딩이 올바르지 않습니다.') from exc
+    if not data.startswith(b'\xff\xd8\xff') or len(data) > 2 * 1024 * 1024:
+        raise ValueError('캡처 이미지 형식 또는 크기가 올바르지 않습니다.')
+    post_id = 'capture_' + url.rsplit('/', 1)[1].replace('-', '')
+    context = {}
+    with tempfile.TemporaryDirectory(prefix='pinmap-capture-') as temp:
+        media_root = Path(temp)
+        folder = media_root / post_id
+        folder.mkdir()
+        image = folder / 'link-slide-01.jpg'
+        image.write_bytes(data)
+        ffmpeg = ffmpeg_bin()
+        probe = Path(ffmpeg).with_name('ffprobe') if ffmpeg else None
+        if probe and probe.is_file():
+            checked = subprocess.run([str(probe), '-v', 'error', '-select_streams', 'v:0',
+                '-show_entries', 'stream=width,height', '-of', 'json', str(image)],
+                capture_output=True, timeout=15)
+            try:
+                dimensions = json.loads(checked.stdout)['streams'][0]
+                width, height = int(dimensions['width']), int(dimensions['height'])
+            except (KeyError, IndexError, ValueError, TypeError):
+                raise ValueError('캡처 이미지를 열 수 없습니다.')
+            if checked.returncode or width < 1 or height < 1 or width * height > 16_000_000:
+                raise ValueError('캡처 이미지 크기를 확인해 주세요.')
+        result = extract_one({'post_id': post_id, 'source_url': url, 'caption': ''},
+                             media_root, content_types=('place', 'event'), analysis_context=context)
+        if result.get('map_locations'):
+            with track_ai_cache(context.setdefault('counts', {})):
+                attach_location_images(result, folder, ocr_rows=context.get('ocr_rows'))
+        if ffmpeg:
+            thumb = folder / 'cover-thumb.jpg'
+            converted = subprocess.run([ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
+                '-i', str(image), '-vf', 'scale=480:-2', '-q:v', '6', str(thumb)],
+                capture_output=True, timeout=20)
+            if converted.returncode == 0 and thumb.is_file() and thumb.stat().st_size <= 300 * 1024:
+                result['cover_data_url'] = 'data:image/jpeg;base64,' + base64.b64encode(thumb.read_bytes()).decode('ascii')
+    result['analysis_metrics'] = {key: value for key, value in context.items() if key != 'ocr_rows'}
+    return {'schema_version': 1, 'input': 'screenshot', 'results': [result]}
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path != '/health':
@@ -1595,13 +1651,14 @@ class Handler(BaseHTTPRequestHandler):
         if not hmac.compare_digest(supplied, 'Bearer ' + token):
             return self.respond(401, {'error': 'unauthorized'})
         parsed = urlparse(self.path)
-        if parsed.path not in ('/extract', '/media', '/extract-link', '/resolve-places'):
+        if parsed.path not in ('/extract', '/media', '/extract-link', '/extract-capture', '/resolve-places'):
             return self.respond(404, {'error': 'not_found'})
         try:
             size = int(self.headers.get('Content-Length', '0'))
             limit = (MAX_ZIP if parsed.path == '/extract' else
                      (128 * 1024 if parsed.path == '/resolve-places' else
-                      (1024 * 1024 if parsed.path == '/extract-link' else 150 * 1024 * 1024)))
+                      (3 * 1024 * 1024 if parsed.path == '/extract-capture' else
+                       (1024 * 1024 if parsed.path == '/extract-link' else 150 * 1024 * 1024))))
             if size < 1 or size > limit:
                 raise ValueError('요청 파일 크기가 허용 범위를 벗어났습니다.')
             if parsed.path == '/resolve-places':
@@ -1617,6 +1674,11 @@ class Handler(BaseHTTPRequestHandler):
                 result = extract_link(request.get('url', ''), request.get('ignore_caption') is True,
                                       request.get('content_types'))
                 self.respond(200, result)
+                return
+            if parsed.path == '/extract-capture':
+                if not self.headers.get('Content-Type', '').startswith('application/json'):
+                    raise ValueError('JSON 입력이 필요합니다.')
+                self.respond(200, extract_capture(json.loads(self.rfile.read(size))))
                 return
             if parsed.path == '/media':
                 query = parse_qs(parsed.query)

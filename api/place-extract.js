@@ -61,11 +61,12 @@ async function readJsonLimited(response) {
   return JSON.parse(raw);
 }
 
-async function forwardExtraction(payload, { env = process.env, fetcher = fetch, timeoutMs = 270000 } = {}) {
+async function forwardExtraction(payload, { env = process.env, fetcher = fetch, timeoutMs = 270000,
+  path = '/extract-link' } = {}) {
   const config = extractorConfig(env);
   if (!config) return { status: 503, body: { error: 'extractor_not_configured' } };
   try {
-    const response = await fetcher(config.target, {
+    const response = await fetcher(new URL(path, config.target), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.token}` },
       body: JSON.stringify(payload),

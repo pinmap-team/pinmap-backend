@@ -138,6 +138,57 @@ test('DELETE removes only the current account record and does not claim extracti
   } finally {global.fetch=oldFetch;restore();}
 });
 
+test('screenshot is authenticated, analyzed, and saved under an account-owned capture id', async () => {
+  const restore=configure(),oldFetch=global.fetch,calls=[];
+  const captureId='550e8400-e29b-41d4-a716-446655440000';
+  const captureUrl=`pinmap://capture/${captureId}`;
+  try {
+    global.fetch=async (url,options={}) => {
+      const target=String(url);calls.push({target,options});
+      if(target.endsWith('/auth/v1/user'))return reply(user);
+      if(target.includes('/pinmap_saved_content')&&target.includes('limit=0'))return reply([]);
+      if(target.endsWith('/extract-capture')){
+        const input=JSON.parse(options.body);
+        assert.equal(input.url,captureUrl);
+        assert.equal(input.image_data_url,'data:image/jpeg;base64,/9j/');
+        return reply({results:[{...report,source_url:captureUrl}]});
+      }
+      if(target.includes('/pinmap_saved_content')&&options.method==='POST'){
+        const row=JSON.parse(options.body);
+        assert.equal(row.source_url,captureUrl);
+        assert.equal(row.content_kind,'mixed');
+        assert(!JSON.stringify(row).includes('capture_image'));
+        return reply([{...row,id:captureId}],201);
+      }
+      throw Error(`unexpected ${target}`);
+    };
+    const response=res();
+    await handler(req('POST',{capture_id:captureId,capture_image:'data:image/jpeg;base64,/9j/'}),response);
+    assert.equal(response.code,200);
+    assert.equal(response.body.item.source_url,captureUrl);
+    assert.equal(calls.length,4);
+  } finally {global.fetch=oldFetch;restore();}
+});
+
+test('capture deletion remains scoped to the authenticated user', async () => {
+  const restore=configure(),oldFetch=global.fetch;
+  const captureUrl='pinmap://capture/550e8400-e29b-41d4-a716-446655440000';
+  try {
+    global.fetch=async (url,options={}) => {
+      if(String(url).endsWith('/auth/v1/user'))return reply(user);
+      assert.equal(options.method,'DELETE');
+      const query=new URL(url).searchParams;
+      assert.equal(query.get('user_id'),`eq.${userId}`);
+      assert.equal(query.get('source_url'),`eq.${captureUrl}`);
+      return reply([{id:'one',user_id:userId,source_url:captureUrl}]);
+    };
+    const response=res();
+    await handler(req('DELETE',{url:captureUrl}),response);
+    assert.equal(response.code,200);
+    assert.deepEqual(response.body,{deleted:true});
+  } finally {global.fetch=oldFetch;restore();}
+});
+
 test('collection failure saves an unknown link without raw OCR and never overwrites a previous result', async () => {
   const restore=configure(),oldFetch=global.fetch,calls=[];
   try {

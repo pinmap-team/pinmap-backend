@@ -1377,12 +1377,17 @@ def attach_location_images(result, media_dir, ocr_rows=None):
         return
     locations = result.get('map_locations', [])[:32]
     image_files = sorted(p for p in media_dir.glob('link-slide-*') if p.is_file() and p.suffix.lower() in IMAGE_EXT)[:24]
-    if any(not (loc.get('evidence') or {}).get('file') for loc in locations) and shutil.which('tesseract'):
+    slide_names = {p.name for p in image_files}
+    if image_files and any((loc.get('evidence') or {}).get('file') not in slide_names for loc in locations) and (ocr_rows is not None or shutil.which('tesseract')):
         recognized = {}
+        recognized_lines = {}
         started = time.monotonic()
         for row in ocr_rows or []:
-            if row.get('time_seconds') is None:
-                recognized[row['source_file']] = normalized_place_name(' '.join(row.get('lines', [])))
+            if row.get('time_seconds') is None and row.get('source_file') in slide_names:
+                filename = row['source_file']
+                lines = [normalized_place_name(line) for line in row.get('lines', [])]
+                recognized[filename] = recognized.get(filename, '') + ''.join(lines)
+                recognized_lines.setdefault(filename, []).extend(lines)
         for media in image_files if ocr_rows is None else []:
             if time.monotonic() - started > 45:
                 break
@@ -1391,28 +1396,46 @@ def attach_location_images(result, media_dir, ocr_rows=None):
                                       capture_output=True, text=True, timeout=5)
                 if scan.returncode == 0:
                     recognized[media.name] = normalized_place_name(scan.stdout)
+                    recognized_lines[media.name] = [normalized_place_name(line) for line in scan.stdout.splitlines()]
             except (OSError, subprocess.TimeoutExpired):
                 continue
         for location in locations:
-            if (location.get('evidence') or {}).get('file'):
+            if (location.get('evidence') or {}).get('file') in slide_names:
                 continue
             name = normalized_place_name(location.get('name'))
             if len(name) < 2:
                 continue
-            matches = [filename for filename, text in recognized.items() if name in text]
-            if len(matches) == 1:
+            matches = [media.name for media in image_files if name in recognized.get(media.name, '')]
+            if not matches and len(name) >= 6:
+                # OCR can misread one character of a venue name. Compare
+                # similarly sized fragments inside each carousel text line.
+                scored = []
+                for media in image_files:
+                    best = 0
+                    for line in recognized_lines.get(media.name, []):
+                        for width in range(max(4, len(name) - 2), min(len(line), len(name) + 2) + 1):
+                            for start in range(len(line) - width + 1):
+                                best = max(best, difflib.SequenceMatcher(None, name, line[start:start + width]).ratio())
+                    if best >= 0.86:
+                        scored.append((best, media.name))
+                if scored:
+                    matches = [max(scored)[1]]
+            # Short generic labels can appear on unrelated slides. For a
+            # distinct name, the first matching carousel slide is its cover.
+            if matches and (len(name) >= 3 or len(matches) == 1):
                 location['image_match_file'] = matches[0]
-    unmatched = [loc for loc in locations if not (loc.get('evidence') or {}).get('file') and not loc.get('image_match_file')]
+    unmatched = [loc for loc in locations if (loc.get('evidence') or {}).get('file') not in slide_names and not loc.get('image_match_file')]
     if unmatched:
         matches = ai_match_location_images(unmatched, image_files, ffmpeg)
         for location in unmatched:
             location['image_match_file'] = matches.get(normalized_place_name(location.get('name')))
     total_encoded = 0
+    per_image_budget = min(120000, 480000 // max(1, len(locations)))
     cache = {}
     with tempfile.TemporaryDirectory(prefix='pinmap-place-images-') as temp:
         for index, location in enumerate(locations):
             evidence = location.get('evidence') or {}
-            filename = evidence.get('file') or location.get('image_match_file')
+            filename = evidence.get('file') if evidence.get('file') in slide_names else location.get('image_match_file') or evidence.get('file')
             if not isinstance(filename, str) or not filename or Path(filename).name != filename:
                 continue
             media = media_dir / filename
@@ -1421,22 +1444,25 @@ def attach_location_images(result, media_dir, ocr_rows=None):
             seconds = evidence.get('time_seconds') if media.suffix.lower() in VIDEO_EXT else None
             key = (filename, seconds)
             if key not in cache:
-                thumbnail = Path(temp) / ('place-%02d.jpg' % index)
-                command = [ffmpeg, '-hide_banner', '-loglevel', 'error', '-y']
-                if seconds is not None and isinstance(seconds, (int, float)) and 0 <= seconds <= 3600:
-                    command += ['-ss', str(seconds)]
-                command += ['-i', str(media), '-frames:v', '1', '-vf', 'scale=320:-2',
-                            '-q:v', '8', str(thumbnail)]
-                try:
-                    converted = subprocess.run(command, capture_output=True, timeout=20)
-                    if converted.returncode == 0 and thumbnail.is_file() and thumbnail.stat().st_size <= 90 * 1024:
-                        cache[key] = 'data:image/jpeg;base64,' + base64.b64encode(thumbnail.read_bytes()).decode('ascii')
-                    else:
-                        cache[key] = ''
-                except (OSError, subprocess.TimeoutExpired):
-                    cache[key] = ''
+                cache[key] = ''
+                for width,quality in ((320,8),(240,10),(192,12),(160,14),(128,16),(96,18)):
+                    thumbnail = Path(temp) / ('place-%02d-%d.jpg' % (index,width))
+                    command = [ffmpeg, '-hide_banner', '-loglevel', 'error', '-y']
+                    if seconds is not None and isinstance(seconds, (int, float)) and 0 <= seconds <= 3600:
+                        command += ['-ss', str(seconds)]
+                    command += ['-i', str(media), '-frames:v', '1', '-vf', 'scale=%d:-2' % width,
+                                '-q:v', str(quality), str(thumbnail)]
+                    try:
+                        converted = subprocess.run(command, capture_output=True, timeout=20)
+                        if converted.returncode == 0 and thumbnail.is_file() and thumbnail.stat().st_size <= 90 * 1024:
+                            image = 'data:image/jpeg;base64,' + base64.b64encode(thumbnail.read_bytes()).decode('ascii')
+                            if len(image) <= per_image_budget:
+                                cache[key] = image
+                                break
+                    except (OSError, subprocess.TimeoutExpired):
+                        continue
             image = cache[key]
-            if image and total_encoded + len(image) <= 2 * 1024 * 1024:
+            if image and total_encoded + len(image) <= 480000:
                 location['image_data_url'] = image
                 location['image_source_file'] = filename
                 total_encoded += len(image)
@@ -1472,13 +1498,20 @@ def extract_link(url, ignore_caption=False, content_types=None):
         candidates = caption_places(caption) if 'place' in types else []
         caption_complete, _ = caption_analysis_policy(caption, types, candidates)
         notes = observed.get('notes', [])
-        if caption_complete:
+        need_media = 'place' in types or not caption_complete
+        if caption_complete and not need_media:
             context.setdefault('counts', {})['media_skipped_due_caption'] = 1
             context.setdefault('timings', {})['collect_media'] = 0
-        if not caption_complete and ('event' in types or ('place' in types and (not candidates or any(p['needs_review'] for p in candidates)))):
+        if need_media:
             print('2/3 사진·영상 원본 수집 중...', file=sys.stderr, flush=True)
-            with measure_stage(context, 'collect_media'):
-                collected = collect_link(url, 'media', media_root, browser_profile)
+            try:
+                with measure_stage(context, 'collect_media'):
+                    collected = collect_link(url, 'media', media_root, browser_profile)
+            except (OSError, ValueError) as exc:
+                if not caption_complete:
+                    raise
+                collected = {}
+                notes.append('장소 표지 원본을 수집하지 못했습니다: ' + str(exc)[:120])
             if collected.get('caption') and not caption:
                 caption = collected['caption']
             for field in ('author_username', 'author_profile_data_url'):
@@ -1492,11 +1525,11 @@ def extract_link(url, ignore_caption=False, content_types=None):
         result = extract_one(post, media_root, ignore_caption, types, analysis_context=context)
         media_dir = media_root / observed['post_id']
         with measure_stage(context, 'place_images'):
-            if not context.get('counts', {}).get('caption_fast_path'):
+            if result.get('map_locations') and media_dir.is_dir():
                 with track_ai_cache(context.setdefault('counts', {})):
-                    attach_location_images(result, media_dir, ocr_rows=context.get('ocr_rows'))
-            # Caption-complete requests keep the collected cover; missing venue photos
-            # continue to use the existing authenticated Google Places photo fallback.
+                    # Keep the caption fast path's OCR skip. The visual matcher
+                    # can pair carousel slides without re-reading all text.
+                    attach_location_images(result, media_dir, ocr_rows=[] if context.get('counts', {}).get('caption_fast_path') else context.get('ocr_rows'))
         cover = next((p for p in media_dir.glob('link-cover.*') if p.suffix.lower() in IMAGE_EXT), None)
         if cover and ffmpeg_bin():
             with tempfile.TemporaryDirectory(prefix='pinmap-cover-') as cover_temp:

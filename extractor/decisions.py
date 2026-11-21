@@ -7,7 +7,11 @@ import urllib.request
 MODEL = 'gemini-decision-1'
 CATEGORIES = {'restaurant': 'Restaurant or meal recommendation', 'cafe': 'Coffee shop or bakery',
               'bar': 'Cocktail bar or pub', 'exhibition': 'Art or museum exhibition',
-              'pop_up': 'Temporary brand pop-up store', 'other': 'Other or insufficient evidence'}
+              'pop_up': 'Temporary brand pop-up store', 'travel': 'Travel, sightseeing or accommodation',
+              'shopping': 'Product, fashion or shopping recommendation',
+              'recipe': 'Cooking instructions or food recipe',
+              'lifestyle': 'Home, hobbies or practical everyday information',
+              'other': 'Other topic or insufficient evidence'}
 KINDS = {'place': 'Physical venues without a temporary event', 'event': 'Temporary exhibition, pop-up or event',
          'mixed': 'Independent venue recommendations AND events; an event venue alone is not mixed',
          'unknown': 'Neither a specific venue nor an event is supported'}

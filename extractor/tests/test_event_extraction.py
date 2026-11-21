@@ -8,6 +8,27 @@ from place_server import extract, extract_link, extract_one, normalize_content_t
 
 
 class EventExtractionTests(unittest.TestCase):
+    def test_non_location_post_with_ai_summary_is_complete(self):
+        post={'post_id':'ig_recipepost','source_url':'https://www.instagram.com/p/recipepost/',
+              'caption':'바질 파스타를 만드는 순서와 재료를 소개합니다.'}
+        with patch('place_server.complete_ai_analysis',return_value=('바질 파스타 만들기','바질과 면으로 파스타를 만드는 과정입니다.')), \
+             patch('place_server.classify_content',return_value={'status':'classified','category':'recipe'}) as classify:
+            result=extract_one(post,content_types=('place','event'))
+        self.assertEqual(result['status'],'extracted')
+        self.assertEqual(result['content_kind'],'unknown')
+        self.assertEqual(result['places'],[])
+        self.assertEqual(result['events'],[])
+        self.assertEqual(result['classification']['category'],'recipe')
+        classify.assert_called_once()
+
+    def test_non_location_post_without_ai_summary_stays_incomplete(self):
+        post={'post_id':'ig_recipepost','source_url':'https://www.instagram.com/p/recipepost/',
+              'caption':'바질 파스타를 만드는 순서와 재료를 소개합니다.'}
+        with patch('place_server.complete_ai_analysis',return_value=(None,None)), \
+             patch('place_server.classify_content',return_value={'status':'unavailable'}):
+            result=extract_one(post,content_types=('place','event'))
+        self.assertEqual(result['status'],'needs_media_or_ai')
+
     def test_caption_exhibition_keeps_explicit_range_and_venue_evidence(self):
         caption = ('빛의 정원 전시\n기간: 2026.11.15 ~ 2026.12.20\n'
                    '운영: 10:00 ~ 19:00\n장소: 서울 문화센터\n'

@@ -378,3 +378,39 @@ test('Decision classification persists only validated enums and bounded confiden
   }
   assert.deepEqual(handler.sanitizeReport(report,post,userId).classification,{});
 });
+
+test('a summarized post without places or events keeps its category and completed status', () => {
+  const summary={source_url:post,status:'extracted',places:[],events:[],map_locations:[],
+    ai_title:'15분 바질 파스타',ai_summary:'바질 파스타의 재료와 조리 순서를 소개해요.',
+    classification:{source:'gemini_decisions',model:'gemini-decision-1',status:'classified',
+      kind:'unknown',category:'recipe',confidence:.94}};
+  const row=handler.sanitizeReport(summary,post,userId);
+  assert.equal(row.content_kind,'unknown');
+  assert.equal(row.status,'extracted');
+  assert.equal(row.classification.category,'recipe');
+  assert.deepEqual(row.places,[]);
+  assert.deepEqual(row.events,[]);
+  assert.equal(handler.sanitizeReport({...summary,ai_summary:''},post,userId).status,'needs_media_or_ai');
+});
+
+test('summary-only reanalysis upgrades an incomplete save but preserves an existing place', async () => {
+  const config={origin:'https://project.supabase.co',secret:'private'};
+  const row={user_id:userId,source_url:post,content_kind:'unknown',status:'extracted',
+    ai_title:'바질 파스타',ai_summary:'조리법을 소개해요.'};
+  for(const previous of [null,{...row,id:'old',status:'needs_media_or_ai'},
+    {...row,id:'place',content_kind:'place',places:[{name:'원래 장소'}]}]) {
+    const calls=[];
+    const fetcher=async (url,options={})=>{
+      calls.push({url:String(url),options});
+      if(options.method==='POST') {
+        assert.match(options.headers.Prefer,/resolution=merge-duplicates/);
+        return reply([{...row,id:'new'}],201);
+      }
+      return reply(previous?[previous]:[]);
+    };
+    const result=await handler.upsertContent(config,row,fetcher);
+    assert.equal(result.status,200);
+    assert.equal(result.item.id,previous?.content_kind==='place'?'place':'new');
+    assert.equal(calls.length,previous?.content_kind==='place'?1:2);
+  }
+});

@@ -4,9 +4,13 @@ module.exports=async(req,res)=>{
  if(req.method!=='POST')return res.status(405).json({error:'method_not_allowed'});
  let raw;
  try{const chunks=[];let size=0;for await(const chunk of req){size+=Buffer.byteLength(chunk);if(size>1048576)return res.status(413).end();chunks.push(Buffer.from(chunk));}raw=Buffer.concat(chunks);}catch{return res.status(400).end();}
- if(!B.signature(raw,req.headers['paddle-signature'],process.env.PADDLE_WEBHOOK_SECRET))return res.status(401).json({error:'invalid_signature'});
+ // The existing destination without a query belongs to sandbox. Live uses an explicit destination.
+ const environment=req.query?.environment||'sandbox';
+ if(!['sandbox','live'].includes(environment))return res.status(400).json({error:'invalid_environment'});
+ const env={...process.env,PADDLE_ENVIRONMENT:environment};
+ if(!B.signature(raw,req.headers['paddle-signature'],B.setting('WEBHOOK_SECRET',env)))return res.status(401).json({error:'invalid_signature'});
  try{
-  const event=JSON.parse(raw),c=B.config();
+  const event=JSON.parse(raw),c=B.config(env);
   if(!B.id(event.event_id,'evt'))return res.status(400).end();
   const type=event.event_type;
   if(!['transaction.completed','subscription.created','subscription.updated','subscription.activated','subscription.canceled','subscription.paused','subscription.resumed','subscription.past_due','adjustment.created','adjustment.updated'].includes(type))return res.status(200).json({ignored:true});

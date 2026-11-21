@@ -147,3 +147,11 @@ SQL 회귀 검증: 임시 경로의 `@electric-sql/pglite`를 사용하여 `PINM
 `GET /api/billing/config`는 서버에서 활성화한 환경과 브라우저용 공개 토큰·가격 ID만 반환합니다. `PADDLE_CLIENT_TOKEN`은 샌드박스에서 `test_`, 운영에서 `live_` 토큰을 사용합니다. API 키의 환경도 일치해야 합니다. 로그인 앱의 구독·사용량은 활성 환경으로 필터링하며 기존 샌드박스 구독을 운영 이용권으로 전환하지 않습니다.
 
 운영 계정과 체크아웃 도메인의 승인, 운영 제품·KRW 5000/월/세금 포함 가격, 운영 API 키와 공개 토큰·웹훅 비밀키가 준비된 뒤 서버 설정을 함께 전환해야 합니다. `https://pinmap-prototype.vercel.app/checkout.html`은 서버 활성 환경을 사용하고 `?mode=prototype`은 테스트 환경을 사용합니다. 현재 운영 계정 로그인·승인 여부는 확인 전이며 실제 청구는 수행하지 않았습니다.
+
+### 운영 인증 정보 사전 저장 (2026-11-22)
+
+운영용 `PADDLE_LIVE_API_KEY`, `PADDLE_LIVE_CLIENT_TOKEN`, `PADDLE_LIVE_MONTHLY_PRICE_ID`, `PADDLE_LIVE_WEBHOOK_SECRET`을 서버에 별도로 저장합니다. 활성 환경의 전용 값이 우선되며 기존 일반 키는 샌드박스용으로 유지합니다. `PADDLE_ENVIRONMENT=sandbox`인 동안 운영 키를 저장해도 공개 결제와 분석 이용권 환경은 바뀌지 않습니다.
+
+운영 제품 `pro_01m7zvyj8pzczmz0gbgpdddxbg`, 가격 `pri_01m7zw038c1rh0yd7d84v7vm4b`는 월 KRW 5000/세금 포함/수량 1/체험 기간 없음으로 생성하고 API에서 확인했습니다. 웹훅은 `ntfset_01m7zwbt5yq9cz6wq3jvb5drae`이며 `.../api/billing/webhook?environment=live`로 전달됩니다. 명시적 환경별 비밀키로 서명과 Paddle API 계정을 검증합니다. 쿼리 없는 기존 웹훅은 샌드박스로 처리합니다.
+
+현재 계정 인증 및 도메인 승인이 완료되지 않아 공개 환경은 샌드박스로 유지합니다. 승인을 확인한 후에만 활성 환경을 live로 전환합니다. 실제 청구는 수행하지 않았습니다.

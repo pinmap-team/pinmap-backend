@@ -58,3 +58,9 @@ test('public billing configuration rejects mixed environments and never returns 
  assert.throws(()=>B.publicConfig({...env,PADDLE_API_KEY:'pdl_sdbx_apikey_wrong'}));
  assert.throws(()=>B.publicConfig({...env,PADDLE_BILLING_ENABLED:'0'}));
 });
+test('staged live settings cannot change the active sandbox settings',()=>{
+ const env={PADDLE_ENVIRONMENT:'sandbox',PADDLE_API_KEY:'pdl_sdbx_apikey_old',PADDLE_WEBHOOK_SECRET:'sandbox-secret',PADDLE_LIVE_API_KEY:'pdl_live_apikey_new',PADDLE_LIVE_WEBHOOK_SECRET:'live-secret'};
+ assert.equal(B.setting('API_KEY',env),'pdl_sdbx_apikey_old');assert.equal(B.setting('WEBHOOK_SECRET',env),'sandbox-secret');
+ assert.equal(B.setting('API_KEY',{...env,PADDLE_ENVIRONMENT:'live'}),'pdl_live_apikey_new');
+ assert.equal(B.setting('WEBHOOK_SECRET',{...env,PADDLE_ENVIRONMENT:'live'}),'live-secret');
+});

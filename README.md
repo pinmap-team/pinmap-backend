@@ -31,7 +31,7 @@ Cloud Run 추출기는 먼저 Scrapling HTTP 요청으로 지정된 공개 사�
 
 ## 설정과 배포
 
-캡처 화면 분석·저장을 켜기 전에 같은 Supabase 프로젝트에 `database/007_capture_content.sql`을 적용합니다. 계정용 `POST /api/content-save`는 `capture_id`(UUID)와 `capture_image`(JPEG data URL)를 받아 Cloud Run `/extract-capture`에서 장소·일정·설명을 분석합니다. 브라우저는 업로드 전에 이미지를 최대 1600px로 축소합니다. 서버는 원본 이미지를 DB에 저장하지 않고 작은 표지와 분석 결과만 보관합니다. 캡처 항목은 `pinmap://capture/<UUID>` 식별자로 계정별 저장·삭제하며, 원본 외부 링크로 열지 않습니다. Vercel API와 Cloud Run 추출기를 모두 배포해야 이 기능이 동작합니다.
+캡처 화면 분석·저장을 켜기 전에 같은 Supabase 프로젝트에 `database/007_capture_content.sql`과 `database/008_capture_uuid_constraint.sql`을 순서대로 적용합니다. 008은 007의 캡처 UUID 패턴에서 빠진 네 번째 4자리 구간을 보완합니다. 계정용 `POST /api/content-save`는 `capture_id`(UUID)와 `capture_image`(JPEG data URL)를 받아 Cloud Run `/extract-capture`에서 장소·일정·설명을 분석합니다. 브라우저는 업로드 전에 이미지를 최대 1600px로 축소합니다. 서버는 원본 이미지를 DB에 저장하지 않고 작은 표지와 분석 결과만 보관합니다. 캡처 항목은 `pinmap://capture/<UUID>` 식별자로 계정별 저장·삭제하며, 원본 외부 링크로 열지 않습니다. Vercel API와 Cloud Run 추출기를 모두 배포해야 이 기능이 동작합니다.
 
 ### API 키 보관
 

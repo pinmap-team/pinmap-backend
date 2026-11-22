@@ -29,3 +29,4 @@ async function handler(req, res) {
 }
 module.exports = handler;
 module.exports.enabled = enabled;
+module.exports.email = EMAIL;

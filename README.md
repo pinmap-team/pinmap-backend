@@ -51,6 +51,8 @@ Cloud Run 추출기는 먼저 Scrapling HTTP 요청으로 지정된 공개 사�
 
 1. `SUPABASE_URL`이 가리키는 Supabase 프로젝트에 [`database/002_saved_content.sql`](database/002_saved_content.sql)을 적용합니다. 저장 콘텐츠는 계정당 100개로 제한됩니다. 분석 결과 행은 백엔드만 쓰며, 사용자는 자기 계정의 저장 항목만 읽을 수 있습니다. `001_content_extraction_quota.sql`과 `003_developer_test_quota.sql`은 이전 배포 이력이며 현재 API는 해당 횟수 제한 함수를 호출하지 않습니다. 기존 테이블의 기록은 삭제하지 않습니다.
 2. `extractor/`의 Dockerfile을 사용해 Cloud Run에 배포합니다. `PINMAP_TEST_TOKEN`에는 Vercel의 `PINMAP_EXTRACTOR_TOKEN`과 동일한 서버 전용 값을 설정합니다. AI 키와 지도 제공자 키는 Git이 아닌 Cloud Run에 설정합니다. Cloud Run 배포 버전은 별도로 배포하고 확인해야 합니다. Vercel의 Git 배포는 Cloud Run을 업데이트하지 않습니다.
+
+   추출기 이미지에는 `whisper.cpp` v1.9.5의 `whisper-cli`와 다국어 `base` 모델을 포함합니다. 모델의 SHA-1을 빌드 중 확인하고, 컨테이너 안에서 한국어 모드의 WAV→JSON 전사 연동 검사를 통과해야 이미지가 완성됩니다. 모델 경로 기본값은 이미지의 `PINMAP_WHISPER_MODEL=/opt/pinmap-models/ggml-base.bin`입니다. Cloud Run 배포 때 같은 경로를 명시하고, 음성이 있는 새 영상 분석에서 `audio_transcripts`가 생성되는지 확인합니다. 이미 저장한 게시물은 재분석해야 기존 분석 안내가 바뀝니다. 캡션만으로 충분하다고 판단한 빠른 경로는 기존 정책대로 미디어·음성 분석을 생략합니다.
 3. 이 저장소를 Vercel 프로젝트에 연결하고 `.env.example`에 설명된 Vercel 환경 변수들을 설정합니다. `SUPABASE_PUBLISHABLE_KEY`는 설계상 공개 키입니다. 새 API 경로를 배포하기 전에 `SUPABASE_SECRET_KEY`(`sb_secret_…`)를 **서버 전용** Vercel 환경 변수로 설정합니다. 이 값을 브라우저, Git, URL, 채팅에 넣지 마세요. 추출기 토큰은 서버에만 보관합니다. 개발자 테스트 코드는 Vercel에 설정하고 `X-Pinmap-Test-Code` 요청 헤더에만 넣으며, Git이나 공개 링크에는 넣지 않습니다.
 4. Cloud Run의 `GET /health`, `GET /api/map-config`, `GET /api/auth/config`, 인증된 개발자의 `POST /api/place-extract`, 그리고 공개 웹의 동일 출처 재작성 경로를 통한 인증된 `POST`·`GET`·`DELETE` 요청을 `/api/content-save`에서 확인합니다. 두 번째 계정이 첫 번째 계정의 행을 읽을 수 없는지, Supabase에 조작한 분석 결과를 직접 쓸 수 없는지, 공식·개발자 분석이 이전 일일 한도를 넘어 실행되는지 확인합니다. 날짜가 일부만 있는 행사와 좌표가 모호한 장소도 검사합니다. 어느 쪽에도 근거 없는 날짜나 지도 핀이 추가되어서는 안 됩니다.
 

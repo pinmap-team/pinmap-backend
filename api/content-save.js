@@ -2,8 +2,12 @@ const Billing = require('../lib/billing');
 const { extractionRequest, extractorConfig, forwardExtraction, instagramLink } = require('./place-extract');
 const { getKey } = require('../config/keys.cjs');
 const { supabaseConfig, bearerToken, authenticatedUser } = require('./content-extract');
+const { randomUUID } = require('node:crypto');
 
 const MAX_REQUEST_BYTES = 4096;
+const MAX_CAPTURE_REQUEST_BYTES = 3 * 1024 * 1024;
+const CAPTURE_URL = /^pinmap:\/\/capture\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CAPTURE_IMAGE = /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/;
 const MAX_DATABASE_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_LENGTH = 410000;
 const MAX_MAP_IMAGE_LENGTH = 125000;
@@ -86,8 +90,12 @@ function sanitizeReport(report, sourceUrl, userId) {
   if (!report || typeof report !== 'object' || Array.isArray(report) ||
       !['extracted', 'needs_review', 'collection_failed', 'needs_media_or_ai',
         'extractor_unavailable', 'extractor_timeout', 'extractor_invalid_response'].includes(report.status)) return null;
-  try { if (instagramLink(report.source_url) !== sourceUrl) return null; }
-  catch { return null; }
+  if (CAPTURE_URL.test(sourceUrl)) {
+    if (report.source_url !== sourceUrl) return null;
+  } else {
+    try { if (instagramLink(report.source_url) !== sourceUrl) return null; }
+    catch { return null; }
+  }
   const warnings = [];
   const hasExtractedData = ['extracted', 'needs_review'].includes(report.status);
   const rawPlaces = hasExtractedData && Array.isArray(report.places) ? report.places : [];
@@ -315,12 +323,23 @@ module.exports = async function contentSave(req, res) {
     let bytes;
     try { bytes = Buffer.byteLength(typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {})); }
     catch { return res.status(400).json({ error: 'invalid_request' }); }
-    if (declared > MAX_REQUEST_BYTES || bytes > MAX_REQUEST_BYTES) return res.status(413).json({ error: 'request_too_large' });
+    if (declared > MAX_CAPTURE_REQUEST_BYTES || bytes > MAX_CAPTURE_REQUEST_BYTES)
+      return res.status(413).json({ error: 'request_too_large' });
     try {
       const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-      const allowed = req.method === 'POST' ? ['url', 'content_types'] : ['url'];
+      const capture = req.method === 'POST' && body?.capture_image !== undefined;
+      if (bytes > (capture ? MAX_CAPTURE_REQUEST_BYTES : MAX_REQUEST_BYTES))
+        return res.status(413).json({ error: 'request_too_large' });
+      const allowed = capture ? ['capture_image', 'capture_id'] : req.method === 'POST' ? ['url', 'content_types'] : ['url'];
       if (Object.keys(body).some(key => !allowed.includes(key))) throw Error('unexpected_field');
-      payload = extractionRequest(body, ['place', 'event']);
+      if (capture) {
+        if (!CAPTURE_IMAGE.test(body.capture_image) || body.capture_image.length > 2800000 ||
+            (body.capture_id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.capture_id)))
+          throw Error('invalid_capture');
+        payload = {url:'pinmap://capture/' + (body.capture_id || randomUUID()),
+          image_data_url:body.capture_image,content_types:['place','event']};
+      } else if (req.method === 'DELETE' && CAPTURE_URL.test(body.url)) payload = {url:body.url};
+      else payload = extractionRequest(body, ['place', 'event']);
     } catch { return res.status(400).json({ error: 'invalid_request' }); }
   } else {
     query = listQuery(req);
@@ -349,12 +368,17 @@ module.exports = async function contentSave(req, res) {
   try { reservation=await Billing.reserve(auth.userId); }
   catch(error){return res.status(error.status||503).json({error:error.status?error.message:'billing_unavailable'});}
   let forwarded;
-  try { forwarded = await forwardExtraction(payload, { timeoutMs: 245000 }); }
+  try { forwarded = await forwardExtraction(payload, { timeoutMs: 245000,
+    path: payload.image_data_url ? '/extract-capture' : '/extract-link' }); }
   catch {await Billing.finish(reservation,false);return res.status(503).json({error:'extractor_unavailable'});}
 
   const result = forwarded.status === 200 && Array.isArray(forwarded.body.results) &&
     forwarded.body.results.length === 1 ? forwarded.body.results[0] : null;
   let row = result && sanitizeReport(result, payload.url, auth.userId);
+  if (payload.image_data_url && !row) {
+    await Billing.finish(reservation, false);
+    return res.status(forwarded.status === 504 ? 504 : 502).json({error:'capture_analysis_failed'});
+  }
   if (!row) {
     const status = forwarded.status === 504 ? 'extractor_timeout' :
       forwarded.status === 200 ? 'extractor_invalid_response' : 'extractor_unavailable';

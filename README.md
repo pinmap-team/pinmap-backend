@@ -31,6 +31,8 @@ Cloud Run 추출기는 먼저 Scrapling HTTP 요청으로 지정된 공개 사�
 
 ## 설정과 배포
 
+캡처 화면 분석·저장을 켜기 전에 같은 Supabase 프로젝트에 `database/007_capture_content.sql`을 적용합니다. 계정용 `POST /api/content-save`는 `capture_id`(UUID)와 `capture_image`(JPEG data URL)를 받아 Cloud Run `/extract-capture`에서 장소·일정·설명을 분석합니다. 브라우저는 업로드 전에 이미지를 최대 1600px로 축소합니다. 서버는 원본 이미지를 DB에 저장하지 않고 작은 표지와 분석 결과만 보관합니다. 캡처 항목은 `pinmap://capture/<UUID>` 식별자로 계정별 저장·삭제하며, 원본 외부 링크로 열지 않습니다. Vercel API와 Cloud Run 추출기를 모두 배포해야 이 기능이 동작합니다.
+
 ### API 키 보관
 
 운영 키의 단일 저장 파일은 [`extractor/production-keys.enc.json`](extractor/production-keys.enc.json)입니다. GitHub에는 AES-256-GCM으로 암호화된 값만 올라갑니다. Vercel과 Cloud Run에는 복호화용 `PINMAP_KEYS_MASTER_KEY`(64자리 16진수)를 **각각 서버 전용 환경 변수**로 등록합니다. 이 변수가 있으면 서버의 `config/keys.cjs`와 추출기의 `extractor/runtime_keys.py`가 같은 파일의 값을 우선 읽습니다. 변수가 없는 기존 배포는 이전 개별 환경 변수로 계속 동작합니다. 브라우저에는 지도용 공개 키만 기존 설정 API를 통해 전달합니다.

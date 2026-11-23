@@ -20,6 +20,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import uuid
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -835,12 +836,45 @@ def request_json_with_retry(request, opener=None, sleeper=None, timeout=180):
 def transcribe_videos(files, work):
     ffmpeg, whisper = ffmpeg_bin(), shutil.which('whisper-cli')
     model = os.getenv('PINMAP_WHISPER_MODEL', '')
-    if not ffmpeg or not whisper or not model or not Path(model).is_file():
+    settings = ai_settings()
+    use_openai = settings.get('MULTIUSER_AI_PROVIDER') == 'openai' and bool(settings.get('OPENAI_API_KEY'))
+    if not ffmpeg or (not use_openai and (not whisper or not model or not Path(model).is_file())):
         return [], ['영상 음성 전사 도구 또는 모델이 없어 음성은 분석하지 않았습니다.'] if any(p.suffix.lower() in VIDEO_EXT for p in files) else []
     transcripts, notes = [], []
     for media in files:
         if media.suffix.lower() not in VIDEO_EXT:
             continue
+        if use_openai:
+            audio_file = work / (media.stem + '.mp3')
+            audio = subprocess.run([ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-i', str(media),
+                                    '-vn', '-ar', '16000', '-ac', '1', '-b:a', '48k', str(audio_file)],
+                                   capture_output=True, text=True, timeout=120)
+            if audio.returncode or not audio_file.is_file():
+                notes.append(media.name + ': 음성 트랙을 읽지 못했습니다.')
+                continue
+            try:
+                if audio_file.stat().st_size > 25 * 1024 * 1024:
+                    raise ValueError('audio_too_large')
+                boundary = uuid.uuid4().hex
+                body = (f'--{boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n'
+                        f'{os.getenv("PINMAP_OPENAI_TRANSCRIBE_MODEL", "gpt-transcribe")}\r\n'
+                        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.mp3"\r\n'
+                        'Content-Type: audio/mpeg\r\n\r\n').encode() + audio_file.read_bytes() + f'\r\n--{boundary}--\r\n'.encode()
+                request = urllib.request.Request('https://api.openai.com/v1/audio/transcriptions',
+                    data=body, headers={'Authorization': 'Bearer ' + settings['OPENAI_API_KEY'],
+                                        'Content-Type': 'multipart/form-data; boundary=' + boundary})
+                with urllib.request.urlopen(request, timeout=90) as response:
+                    text = json.load(response).get('text', '').strip()
+                if text:
+                    transcripts.append({'source_file': media.name, 'time_seconds': None,
+                                        'end_seconds': None, 'text': text})
+                continue
+            except (OSError, ValueError, urllib.error.URLError, KeyError) as exc:
+                print(json.dumps({'stage': 'audio_fallback', 'reason': type(exc).__name__}),
+                      file=sys.stderr, flush=True)
+                if not whisper or not model or not Path(model).is_file():
+                    notes.append(media.name + ': 음성 전사 실패')
+                    continue
         wav = work / (media.stem + '.wav')
         audio = subprocess.run([ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-i', str(media), '-vn', '-ar', '16000', '-ac', '1', str(wav)], capture_output=True, text=True, timeout=120)
         if audio.returncode or not wav.is_file():
@@ -1137,15 +1171,25 @@ def extract_one(post, media_root=None, ignore_caption=False, content_types=('pla
             notes.extend(media_notes)
             context['counts']['ocr_images'] = len(images)
             context['counts']['image_files'] = sum(p.suffix.lower() in IMAGE_EXT for p in files)
-            with measure_stage(context, 'ocr'):
-                rows, ocr_notes = ocr_images(images)
+            if ai_settings().get('MULTIUSER_AI_PROVIDER') == 'openai' and any(p.suffix.lower() in VIDEO_EXT for p in files):
+                def transcribe_in_background():
+                    with measure_stage(context, 'audio'):
+                        return transcribe_videos(files, Path(temp))
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    audio_future = pool.submit(transcribe_in_background)
+                    with measure_stage(context, 'ocr'):
+                        rows, ocr_notes = ocr_images(images)
+                    transcripts, audio_notes = audio_future.result()
+            else:
+                with measure_stage(context, 'ocr'):
+                    rows, ocr_notes = ocr_images(images)
+                with measure_stage(context, 'audio'):
+                    transcripts, audio_notes = transcribe_videos(files, Path(temp))
             context['ocr_rows'] = rows
             observed_text = [{'file': row['source_file'], 'time_seconds': row['time_seconds'],
                               'lines': row['lines'][:15]} for row in rows]
             notes.extend(ocr_notes)
             screen_text = group_screen_text(rows)
-            with measure_stage(context, 'audio'):
-                transcripts, audio_notes = transcribe_videos(files, Path(temp))
             notes.extend(audio_notes)
             audio_transcripts = transcripts
             if want_places:
@@ -1797,7 +1841,10 @@ def print_results(result):
         if post.get('audio_transcripts'):
             print('음성 전사 구간:', len(post['audio_transcripts']), '개')
             for segment in post['audio_transcripts']:
-                print(' - %.1f~%.1f초: %s' % (segment['time_seconds'], segment['end_seconds'], segment['text']))
+                if segment.get('time_seconds') is None or segment.get('end_seconds') is None:
+                    print(' - 시각 미제공: %s' % segment['text'])
+                else:
+                    print(' - %.1f~%.1f초: %s' % (segment['time_seconds'], segment['end_seconds'], segment['text']))
         if not places and post.get('observed_text') and not post.get('screen_text'):
             print('화면에서 읽은 글자 (일부):')
             for item in post['observed_text'][:8]:

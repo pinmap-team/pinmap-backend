@@ -4,12 +4,36 @@ import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from place_server import lookup_place_address, resolve_missing_addresses, geocode_address, extract_one, ocr_named_places, request_json_with_retry, ai_extract, ai_post_summary, dedupe, compatible_place_addresses, valid_world_point
+from place_server import lookup_place_address, resolve_missing_addresses, geocode_address, extract_one, ocr_named_places, request_json_with_retry, ai_extract, ai_post_summary, ai_match_location_images, dedupe, compatible_place_addresses, valid_world_point
 
 
 class PlaceLookupTests(unittest.TestCase):
+    def test_openai_matches_named_place_to_source_image(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source=Path(temp)/'link-slide-01.jpg'
+            source.write_bytes(b'image')
+            def thumbnail(command, **_):
+                Path(command[-1]).write_bytes(b'thumbnail')
+                return SimpleNamespace(returncode=0)
+            output={'status':'completed','output':[{'content':[{'type':'output_text',
+                'text':json.dumps({'matches':[{'name':'서울숲','file':source.name}]})}]}]}
+            settings={'MULTIUSER_AI_PROVIDER':'openai','OPENAI_API_KEY':'test-key',
+                      'PINMAP_PLACE_AI_MODEL':'gpt-4.1-mini'}
+            with patch('place_server.ai_settings',return_value=settings), \
+                 patch('place_server.subprocess.run',side_effect=thumbnail), \
+                 patch('place_server.request_json_with_retry',return_value=output) as send:
+                matches=ai_match_location_images([{'name':'서울숲'}],[source],'ffmpeg')
+            self.assertEqual(matches,{'서울숲':source.name})
+            request=send.call_args.args[0]
+            self.assertEqual(request.full_url,'https://api.openai.com/v1/responses')
+            body=json.loads(request.data)
+            self.assertEqual(body['model'],'gpt-4.1-mini')
+            self.assertFalse(body['store'])
+            self.assertTrue(any(part['type']=='input_image' for part in body['input'][0]['content']))
+
     def test_invalid_numeric_coordinates_cannot_become_map_pins(self):
         self.assertFalse(valid_world_point({'lat': float('nan'), 'lng': 126.9}))
         self.assertFalse(valid_world_point({'lat': True, 'lng': 126.9}))

@@ -52,7 +52,7 @@ def ai_settings():
     if filename:
         try:
             for line in Path(filename).read_text(encoding='utf-8').splitlines():
-                match = re.match(r'^\s*(MULTIUSER_AI_PROVIDER|MULTIUSER_MODEL|GEMINI_API_KEY|NAVER_CLIENT_ID|NAVER_CLIENT_SECRET|GOOGLE_MAPS_API_KEY)=(.*)$', line)
+                match = re.match(r'^\s*(MULTIUSER_AI_PROVIDER|MULTIUSER_MODEL|PINMAP_PLACE_AI_MODEL|GEMINI_API_KEY|OPENAI_API_KEY|NAVER_CLIENT_ID|NAVER_CLIENT_SECRET|GOOGLE_MAPS_API_KEY)=(.*)$', line)
                 if match:
                     settings.setdefault(match.group(1), match.group(2).strip().strip('"\''))
         except OSError:
@@ -484,7 +484,8 @@ def resolve_missing_addresses(places, caption='', max_workers=None):
             decision = decisions.get(decision_key)
             decision_selected = False
             if decision:
-                place['map_validation'] = {'source': 'gemini_decisions', **decision}
+                provider = decision_settings.get('MULTIUSER_AI_PROVIDER', 'gemini')
+                place['map_validation'] = {'source': provider + '_decisions', **decision}
                 if decision['status'] == 'selected':
                     selected = tasks_by_id[decision_key]['candidates'][decision['index']]
                     ranked = [selected] + [candidate for candidate in ranked if
@@ -1339,12 +1340,14 @@ def collect_link(url, mode, media_root=None, browser_profile=None):
 
 
 def ai_match_location_images(locations, image_files, ffmpeg):
-    """Ask Gemini to pair only visibly named places with their source slides."""
+    """Pair visibly named places with source slides using the selected AI provider."""
     settings = ai_settings()
-    if settings.get('MULTIUSER_AI_PROVIDER') != 'gemini' or not settings.get('GEMINI_API_KEY') or not image_files:
+    provider = settings.get('MULTIUSER_AI_PROVIDER', 'gemini')
+    key = settings.get('OPENAI_API_KEY' if provider == 'openai' else 'GEMINI_API_KEY', '').strip()
+    if provider not in ('gemini', 'openai') or not key or not image_files:
         return {}
-    model = settings.get('MULTIUSER_MODEL', '')
-    if not re.fullmatch(r'gemini-[A-Za-z0-9.-]+', model):
+    model = settings.get('PINMAP_PLACE_AI_MODEL', 'gpt-4.1-mini') if provider == 'openai' else settings.get('MULTIUSER_MODEL', '')
+    if provider == 'gemini' and not re.fullmatch(r'gemini-[A-Za-z0-9.-]+', model):
         return {}
     names = [loc.get('name') for loc in locations if len(normalized_place_name(loc.get('name'))) >= 2]
     if not names:
@@ -1377,19 +1380,41 @@ def ai_match_location_images(locations, image_files, ffmpeg):
               'properties': {'matches': {'type': 'array', 'items': {'type': 'object',
               'additionalProperties': False, 'required': ['name', 'file'],
               'properties': {'name': {'type': 'string'}, 'file': {'type': 'string'}}}}}}
-    config = {'responseMimeType': 'application/json', 'responseJsonSchema': schema, 'maxOutputTokens': 1200}
-    if model == 'gemini-2.5-flash':
-        config['thinkingConfig'] = {'thinkingBudget': 0}
-    request = urllib.request.Request(
-        'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent',
-        data=json.dumps({'contents': [{'role': 'user', 'parts': parts}], 'generationConfig': config}).encode('utf-8'),
-        method='POST', headers={'x-goog-api-key': settings['GEMINI_API_KEY'], 'Content-Type': 'application/json'})
+    if provider == 'gemini':
+        config = {'responseMimeType': 'application/json', 'responseJsonSchema': schema, 'maxOutputTokens': 1200}
+        if model == 'gemini-2.5-flash':
+            config['thinkingConfig'] = {'thinkingBudget': 0}
+        request = urllib.request.Request(
+            'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent',
+            data=json.dumps({'contents': [{'role': 'user', 'parts': parts}], 'generationConfig': config}).encode('utf-8'),
+            method='POST', headers={'x-goog-api-key': key, 'Content-Type': 'application/json'})
+    else:
+        content = []
+        for part in parts:
+            if 'text' in part:
+                content.append({'type': 'input_text', 'text': part['text']})
+            else:
+                image = part['inline_data']
+                content.append({'type': 'input_image', 'image_url':
+                    'data:' + image['mime_type'] + ';base64,' + image['data'], 'detail': 'high'})
+        request = urllib.request.Request('https://api.openai.com/v1/responses',
+            data=json.dumps({'model': model, 'store': False, 'input': [{'role': 'user', 'content': content}],
+                             'text': {'format': {'type': 'json_schema', 'name': 'pinmap_place_images',
+                                                 'strict': True, 'schema': schema}}}).encode(), method='POST',
+            headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
     try:
         output = request_json_with_retry(request, timeout=65)
-        candidate = (output.get('candidates') or [{}])[0]
-        if candidate.get('finishReason') != 'STOP':
-            return {}
-        parsed = json.loads(''.join(part.get('text', '') for part in candidate.get('content', {}).get('parts', [])))
+        if provider == 'gemini':
+            candidate = (output.get('candidates') or [{}])[0]
+            if candidate.get('finishReason') != 'STOP':
+                return {}
+            text = ''.join(part.get('text', '') for part in candidate.get('content', {}).get('parts', []))
+        else:
+            if output.get('status') != 'completed':
+                return {}
+            text = ''.join(part.get('text', '') for item in output.get('output', [])
+                           for part in item.get('content', []) if part.get('type') == 'output_text')
+        parsed = json.loads(text)
     except (urllib.error.URLError, ValueError, KeyError):
         return {}
     allowed_names = {normalized_place_name(name): name for name in names}
@@ -1575,7 +1600,7 @@ def extract_link(url, ignore_caption=False, content_types=None):
         result['notes'] = list(dict.fromkeys(notes + result['notes']))
         context['total_seconds'] = round(time.monotonic() - analysis_started, 3)
         result['analysis_metrics'] = {key: value for key, value in context.items() if key != 'ocr_rows'}
-        return {'schema_version': 1, 'place_only_test': place_only, 'category_classification': result.get('classification', {}).get('source') == 'gemini_decisions',
+        return {'schema_version': 1, 'place_only_test': place_only, 'category_classification': result.get('classification', {}).get('source') in ('gemini_decisions', 'openai_decisions'),
                 'input': 'instagram_link', 'results': [result]}
 
 

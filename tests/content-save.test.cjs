@@ -428,6 +428,8 @@ test('Decision classification persists only validated enums and bounded confiden
     assert.deepEqual(handler.sanitizeReport({...report,classification:{...classification,...change}},post,userId).classification,{});
   }
   assert.deepEqual(handler.sanitizeReport(report,post,userId).classification,{});
+  const openai={...classification,source:'openai_decisions',model:'gpt-4.1-mini'};
+  assert.equal(handler.sanitizeReport({...report,classification:openai},post,userId).classification.source,'openai_decisions');
 });
 
 test('a summarized post without places or events keeps its category and completed status', () => {

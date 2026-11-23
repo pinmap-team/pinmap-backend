@@ -20,6 +20,10 @@
 
 ## 요청 흐름
 
+### OpenAI 분석 제공자
+
+Cloud Run의 `pinmap-place-extract-test` 서비스에 `OPENAI_API_KEY`를 서버 전용 환경변수로 등록한 뒤 `MULTIUSER_AI_PROVIDER=openai`로 전환한다. `PINMAP_PLACE_AI_MODEL`을 지정하지 않으면 `gpt-4.1-mini`를 사용한다. 장소·일정·콘텐츠 설명, 장소 사진 매칭, 분류와 불확실한 지도 후보 검증은 선택한 제공자의 코드 경로를 사용한다. Gemini 경로는 유지한다. 다시 사용하려면 `MULTIUSER_AI_PROVIDER=gemini`, `GEMINI_API_KEY`, `MULTIUSER_MODEL`만 설정하면 된다. 전환 전에 실제 키로 분석 요청을 확인하고, 오류가 나면 제공자 설정을 이전 값으로 되돌린다. 키를 웹 앱, Vercel 브라우저 환경변수, Git에 넣지 않는다.
+
 1. 개발자 테스트 API는 인스타그램 게시물·릴스 URL, 테스트 코드, `content_types: ["place", "event"]`를 `POST /api/place-extract`에서 받습니다. 서비스 자체의 일일 분석 횟수 제한은 없습니다. `content_types`를 생략하는 기존 호출은 장소만 분석합니다.
 2. 공식 `POST /api/content-save` 경로는 Supabase 사용자 액세스 토큰을 요구합니다. 사용자를 인증하고 저장 테이블을 확인한 뒤 횟수 제한 없이 Cloud Run에 분석을 요청합니다. 기본적으로 장소와 행사 두 종류를 모두 분석합니다. `POST /api/content-extract`는 일일 횟수 제한이 없는 인증된 추출 전용 경로로 유지됩니다.
 3. Vercel은 URL을 검증하고 서버 전용 토큰을 사용해 Cloud Run의 `/extract-link`로 요청을 전달합니다. Cloud Run은 지도 핀에 사용할 `places`와 `map_locations`를 반환합니다. 날짜, 시간 문구, 장소, 근거, 검토 필요 여부가 포함된 `events`도 별도로 반환합니다. 연도가 없거나 날짜가 불확실하면 검토할 수 있도록 구조화하지 않은 원문으로 남깁니다.

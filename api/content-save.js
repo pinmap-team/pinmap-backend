@@ -78,8 +78,9 @@ function evidence(value) {
 const CATEGORY_CATALOG = require('../categories.json');
 function classification(value) {
   const category = CATEGORY_CATALOG.find(c=>c.id===value?.category || c.aliases.includes(value?.category));
-  if (!value || value.source !== 'gemini_decisions' || value.status !== 'classified' ||
-      value.model !== 'gemini-decision-1' || !category ||
+  if (!value || !['gemini_decisions','openai_decisions'].includes(value.source) || value.status !== 'classified' ||
+      (value.source === 'gemini_decisions' ? value.model !== 'gemini-decision-1' :
+        typeof value.model !== 'string' || !/^gpt-[A-Za-z0-9.-]{1,50}$/.test(value.model)) || !category ||
       !['place','event','mixed','unknown'].includes(value.kind) ||
       !Number.isFinite(value.confidence) || value.confidence < .8 || value.confidence > 1) return {};
   return {source:value.source,status:value.status,model:value.model,kind:value.kind,

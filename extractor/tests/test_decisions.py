@@ -1,3 +1,5 @@
+import io
+import json
 import sys
 from pathlib import Path
 import unittest
@@ -8,6 +10,24 @@ from place_server import resolve_missing_addresses, lookup_place_address
 SETTINGS={'PINMAP_DECISIONS_ENABLED':'1','GEMINI_API_KEY':'test'}
 def answer(value,confidence=.95): return {'type':'choice','choice':value,'confidence':confidence}
 class DecisionsTests(unittest.TestCase):
+    def test_openai_decisions_use_separate_provider_and_keep_gemini_available(self):
+        settings={'PINMAP_DECISIONS_ENABLED':'1','MULTIUSER_AI_PROVIDER':'openai',
+                  'OPENAI_API_KEY':'test-openai-key','PINMAP_PLACE_AI_MODEL':'gpt-4.1-mini'}
+        result={'kind':answer('place'),'category':answer('food')}
+        payload={'status':'completed','output':[{'content':[{'type':'output_text','text':json.dumps(result)}]}]}
+        with patch('decisions.urllib.request.urlopen',return_value=io.BytesIO(json.dumps(payload).encode())) as send:
+            classified=decisions.classify('칵테일 바',settings)
+        self.assertEqual(classified['source'],'openai_decisions')
+        self.assertEqual(classified['category'],'food')
+        request=send.call_args.args[0]
+        self.assertEqual(request.full_url,'https://api.openai.com/v1/responses')
+        body=json.loads(request.data)
+        self.assertEqual(body['model'],'gpt-4.1-mini')
+        self.assertFalse(body['store'])
+        self.assertEqual(body['text']['format']['schema']['properties']['kind']['properties']['choice']['enum'],list(decisions.KINDS))
+        self.assertTrue(decisions.enabled(SETTINGS))
+        self.assertFalse(decisions.enabled({**settings,'OPENAI_API_KEY':''}))
+
     def test_disabled_and_empty_skip_provider(self):
         with patch('decisions.call') as call:
             self.assertEqual(decisions.classify('카페',{})['source'],'rules')

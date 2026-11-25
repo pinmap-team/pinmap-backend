@@ -17,6 +17,9 @@ module.exports=async(req,res)=>{
   const loc=row.map_locations?.[body.location_index];if(!loc)return res.status(404).json({error:'not_found'});
   if(loc.image_data_url)return res.status(200).json({source:'post',url:loc.image_data_url,attributions:[]});
   if(row.cover_data_url)return res.status(200).json({source:'post',url:row.cover_data_url,attributions:[]});
+  // Google Places photos cannot accompany a non-Google basemap. A saved post
+  // image remains the first choice; otherwise keep the neutral placeholder.
+  if((process.env.NAVER_MAP_CLIENT_ID||'').trim())return res.status(404).json({error:'photo_not_found'});
   const key=getKey('GOOGLE_MAPS_SERVER_KEY');
   if(!key)return res.status(503).json({error:'photo_not_configured'});
   const {getGooglePlacePhoto,validPlaceId}=await import('../lib/google-place-photo.mjs');

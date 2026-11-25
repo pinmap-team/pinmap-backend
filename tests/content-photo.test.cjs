@@ -38,6 +38,18 @@ test('photo route uses the saved post cover before requesting a provider photo',
  try{const r=response();await handler({method:'POST',headers:{authorization:'Bearer '+'t'.repeat(40)},body:{content_id:id,location_index:0}},r);assert.equal(r.code,200);assert.deepEqual(r.body,{source:'post',url:'data:image/jpeg;base64,Yg==',attributions:[]});}
  finally{global.fetch=oldFetch;process.env=oldEnv;}
 });
+test('Naver map configuration does not fetch a Google Places photo',async()=>{
+ const oldEnv={...process.env},oldFetch=global.fetch;
+ Object.assign(process.env,{SUPABASE_URL:'https://test.supabase.co',SUPABASE_PUBLISHABLE_KEY:'sb_publishable_test',SUPABASE_SECRET_KEY:'sb_secret_abcdefghijk',NAVER_MAP_CLIENT_ID:'naver-public-id'});
+ global.fetch=async url=>{
+  const u=String(url);
+  if(u.includes('/auth/v1/user'))return Response.json({id:user,is_anonymous:false});
+  if(u.includes('/rest/v1/'))return Response.json([{id,user_id:user,updated_at:'2026-01-01',map_locations:[{name:'cafe',coordinates:{lat:37.5,lng:127}}]}]);
+  throw Error('Google Places must not be called with a Naver map');
+ };
+ try{const r=response();await handler({method:'POST',headers:{authorization:'Bearer '+'t'.repeat(40)},body:{content_id:id,location_index:0}},r);assert.equal(r.code,404);assert.equal(r.body.error,'photo_not_found');}
+ finally{global.fetch=oldFetch;process.env=oldEnv;}
+});
 test('another account cannot retrieve a photo even if storage responds with an unrelated row',async()=>{
  const oldEnv={...process.env},oldFetch=global.fetch;
  Object.assign(process.env,{SUPABASE_URL:'https://test.supabase.co',SUPABASE_PUBLISHABLE_KEY:'sb_publishable_test',SUPABASE_SECRET_KEY:'sb_secret_abcdefghijk',GOOGLE_MAPS_SERVER_KEY:'secret'});

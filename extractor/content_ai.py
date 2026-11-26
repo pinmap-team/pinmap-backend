@@ -89,7 +89,10 @@ def analyze_content(caption, rows, images, transcripts, places, events, need_pla
               'need_events가 true이면 실제 전시·팝업·행사의 이름과 날짜·장소를 events로 추출하세요. '
               'false인 배열은 비워 두세요. 일반 장소 홍보를 행사로 만들거나 행사 제목을 업소 이름으로 만들지 마세요. '
               '기존 후보는 참고 자료이며 누락된 항목도 확인하세요. 모든 항목은 실제 근거 문구를 포함해야 합니다. '
-              + ('이미지·영상 행사의 evidence에는 화면에서 보이는 행사 이름과 날짜 원문을 함께 적으세요. ' if ai_coordinates else '') +
+              + ('사진·영상에서 장소를 추출할 때는 화면에 실제로 읽히는 장소 이름·간판·주소가 있어야 합니다. '
+                 '보이는 텍스트를 evidence에 원문 그대로 인용하세요. 풍경이나 건물 외관만 보고 장소를 추측하지 마세요. '
+                 '장소를 특정할 문구가 없으면 places는 빈 배열로 반환하세요. ' if ai_coordinates else '') +
+              ('이미지·영상 행사의 evidence에는 화면에서 보이는 행사 이름과 날짜 원문을 함께 적으세요. ' if ai_coordinates else '') +
               '캡션 근거는 source=caption, evidence_file은 빈 문자열입니다. 이미지·영상·음성 근거는 제공된 파일 이름만 쓰세요. '
               '주소·연도·종료일·영업정보는 추측하지 마세요. '
               + ('latitude·longitude는 WGS84 십진수 좌표로, 정확한 장소를 특정할 수 있을 때만 적고 그렇지 않으면 null로 두세요. ' if ai_coordinates else '') +

@@ -1,6 +1,7 @@
 import os
 import contextlib
 import io
+import subprocess
 from pathlib import Path
 import tempfile
 from threading import Barrier
@@ -11,6 +12,30 @@ from place_server import extract_link, extract_one, print_results
 
 
 class AiOnlyPipelineTests(unittest.TestCase):
+    def test_blank_capture_is_not_sent_to_ai_or_turned_into_a_place(self):
+        with tempfile.TemporaryDirectory() as temp:
+            frame = Path(temp) / 'blank.jpg'
+            frame.write_bytes(b'jpeg')
+            image = {'path': str(frame), 'source_file': frame.name,
+                     'time_seconds': None, 'kind': 'image'}
+            with patch.dict(os.environ, {'PINMAP_AI_ONLY_ANALYSIS': '1'}), \
+                 patch('place_server.ai_settings', return_value={'MULTIUSER_AI_PROVIDER': 'openai',
+                                                                  'OPENAI_API_KEY': 'test'}), \
+                 patch('place_server.media_files', return_value=[frame]), \
+                 patch('place_server.prepare_images', return_value=([image], [])), \
+                 patch('place_server.ffmpeg_bin', return_value='/fake/ffmpeg'), \
+                 patch('place_server.subprocess.run', return_value=subprocess.CompletedProcess(
+                     [], 0, stdout=b'\xf5' * 256)), \
+                 patch('place_server.transcribe_videos', return_value=([], [])), \
+                 patch('place_server.analyze_content') as analyze, \
+                 patch('place_server.classify_content', return_value={'source': 'rules'}):
+                result = extract_one({'post_id': 'capture_test',
+                                      'source_url': 'pinmap://capture/test', 'caption': ''})
+            analyze.assert_not_called()
+            self.assertEqual(result['places'], [])
+            self.assertEqual(result['map_locations'], [])
+            self.assertEqual(result['status'], 'needs_media_or_ai')
+
     def test_ai_only_terminal_output_has_no_review_label(self):
         output = io.StringIO()
         report = {'results': [{'route': 'ai_api', 'status': 'extracted',

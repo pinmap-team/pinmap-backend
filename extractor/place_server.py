@@ -1284,12 +1284,29 @@ def extract_one_ai_only(post, media_root=None, ignore_caption=False, content_typ
             # remains below the provider's request-size budget.
             ffmpeg = ffmpeg_bin()
             prepared = []
+            blank_cache = {}
             for index, image in enumerate(images):
                 try:
                     size = Path(image['path']).stat().st_size
                 except OSError:
                     notes.append('이미지 파일 일부를 읽지 못했습니다.')
                     continue
+                if size <= 32768 and ffmpeg:
+                    try:
+                        digest = hashlib.sha256(Path(image['path']).read_bytes()).digest()
+                        if digest not in blank_cache:
+                            sample = subprocess.run([ffmpeg, '-hide_banner', '-loglevel', 'error',
+                                '-i', image['path'], '-frames:v', '1', '-vf', 'scale=16:16:flags=area,format=gray',
+                                '-f', 'rawvideo', 'pipe:1'], capture_output=True, timeout=5)
+                            pixels = sample.stdout if sample.returncode == 0 and len(sample.stdout) == 256 else b''
+                            average = sum(pixels) / len(pixels) if pixels else 0
+                            variance = sum((pixel - average) ** 2 for pixel in pixels) / len(pixels) if pixels else 0
+                            blank_cache[digest] = bool(pixels) and variance < 2
+                        if blank_cache[digest]:
+                            notes.append('내용이 없는 이미지는 분석에서 제외했습니다.')
+                            continue
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
                 if size > 1200000 and ffmpeg:
                     for width in (960, 720, 480):
                         smaller = work / ('ai-frame-%03d-%d.jpg' % (index, width))
@@ -1314,13 +1331,17 @@ def extract_one_ai_only(post, media_root=None, ignore_caption=False, content_typ
         with measure_stage(context, 'audio'):
             transcripts, audio_notes = transcribe_videos(files, work)
         notes.extend(audio_notes)
-        chunks = [images[index:index + chunk_size] for index in range(0, len(images), chunk_size)] or [[]]
+        chunks = [images[index:index + chunk_size] for index in range(0, len(images), chunk_size)]
+        if not chunks and (caption.strip() or transcripts):
+            chunks = [[]]
+        if not chunks:
+            notes.append('분석할 콘텐츠가 없습니다.')
         counts['ai_media_chunks'] = len(chunks)
         counts['ai_media_chunk_workers'] = min(workers, len(chunks))
-        if not key:
+        if not key and chunks:
             notes.append('AI API 키가 없어 콘텐츠를 분석하지 못했습니다.')
             bundles = [(None, 'AI API 키 없음') for _ in chunks]
-        else:
+        elif chunks:
             def analyze_chunk(index_and_chunk):
                 index, chunk = index_and_chunk
                 started = time.monotonic()
@@ -1336,6 +1357,8 @@ def extract_one_ai_only(post, media_root=None, ignore_caption=False, content_typ
             with measure_stage(context, 'ai_media'):
                 with ThreadPoolExecutor(max_workers=min(workers, len(chunks))) as pool:
                     bundles = list(pool.map(analyze_chunk, enumerate(chunks)))
+        else:
+            bundles = []
         counts['ai_media_chunk_failures'] = sum(bundle is None for bundle, _ in bundles)
         for index, ((bundle, error), chunk) in enumerate(zip(bundles, chunks)):
             if bundle is None:

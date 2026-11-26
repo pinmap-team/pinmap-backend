@@ -230,6 +230,23 @@ class EventExtractionTests(unittest.TestCase):
         self.assertEqual(roots[0], roots[1])
         self.assertFalse(roots[0][0].parent.exists())
 
+    def test_reel_place_analysis_collects_caption_and_media_in_one_browser_pass(self):
+        url = 'https://www.instagram.com/reel/abcdefgh/'
+        observed = {'status': 'collected', 'post_id': 'ig_abcdefgh',
+                    'source_url': url, 'caption': '성수 카페', 'notes': []}
+        result = {'post_id': 'ig_abcdefgh', 'source_url': url,
+                  'status': 'needs_review', 'places': [], 'events': [], 'map_locations': [], 'notes': []}
+        modes = []
+        def collect(_url, mode, *_args):
+            modes.append(mode)
+            return observed
+        with patch('place_server.collect_link', side_effect=collect), \
+             patch('place_server.extract_one', return_value=result), \
+             patch('place_server.ffmpeg_bin', return_value=None):
+            output = extract_link(url, content_types=['place', 'event'])
+        self.assertEqual(modes, ['media'])
+        self.assertEqual(output['results'][0]['analysis_metrics']['timings']['collect_caption'], 0)
+
     def test_missing_zip_post_has_stable_event_fields(self):
         with patch('place_server.parse_zip', return_value={}):
             result = extract(b'ignored', ['notfound'])

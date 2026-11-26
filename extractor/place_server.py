@@ -31,6 +31,7 @@ from event_extraction import (normalize_ai_events, ai_extract_events, dedupe_eve
 from ai_request_cache import cached_ai_response, track_ai_cache
 from ai_input import compact_analysis_input, compact_text
 from ai_geocode import estimate_locations
+from ai_public_location import lookup_published_location
 from ocr_tesseract import read_tesseract_images
 from content_ai import analyze_content
 from decisions import enabled as decisions_enabled, classify as classify_content, verify_maps
@@ -41,8 +42,8 @@ HERE = Path(__file__).resolve().parent
 ENTRY = 'your_instagram_activity/saved/saved_posts.json'
 MAX_ZIP = 40 * 1024 * 1024
 REGION = r'(?:서울(?:특별시)?|부산(?:광역시)?|대구(?:광역시)?|인천(?:광역시)?|광주(?:광역시)?|대전(?:광역시)?|울산(?:광역시)?|세종(?:특별자치시)?|경기도?|강원(?:특별자치도|도)?|충청[남북]도|충[남북]|전라[남북]도|전북(?:특별자치도)?|전남|경상[남북]도|경[남북]|제주(?:특별자치도|도)?)'
-ADDRESS = re.compile(REGION + r'\s+(?:(?:[가-힣0-9]+(?:시|군|구))\s+){0,3}[가-힣0-9·.]+(?:로|길|동|리)\s*\d+(?:-\d+)?(?:\s*\d+층)?')
-PARCEL_ADDRESS = re.compile(REGION + r'\s+(?:(?:[가-힣0-9]+(?:시|군|구))\s+){0,3}[가-힣0-9]+(?:동|읍|면|리)(?:\d+가)?\s+(?:산\s*)?\d+(?:-\d+)?')
+ADDRESS = re.compile(REGION + r'\s+(?:(?:[가-힣0-9]+(?:시|군|구|읍|면))\s+){0,4}[가-힣0-9·.]+(?:로|길|동|리)\s*\d+(?:-\d+)?(?:\s*\d+층)?')
+PARCEL_ADDRESS = re.compile(REGION + r'\s+(?:(?:[가-힣0-9]+(?:시|군|구|읍|면))\s+){0,4}[가-힣0-9]+(?:동|읍|면|리)(?:\d+가)?\s+(?:산\s*)?\d+(?:-\d+)?')
 POST_URL = re.compile(r'^https://(?:www\.)?instagram\.com/(?:p|reel|tv)/([A-Za-z0-9_-]+)/?$')
 NUMBERED = re.compile(r'^[❶-❿➀-➉①-⑳➊-➓\d]+[.)\s]*')
 IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.webp'}
@@ -1386,10 +1387,10 @@ def extract_one_ai_only(post, media_root=None, ignore_caption=False, content_typ
             summaries.append((bundle['title'], bundle['summary']))
         merged_places = {}
         for place in places:
-            key = (normalized_place_name(place.get('name')), normalized_place_name(place.get('address')))
-            previous = merged_places.get(key)
+            place_key = (normalized_place_name(place.get('name')), normalized_place_name(place.get('address')))
+            previous = merged_places.get(place_key)
             if previous is None:
-                merged_places[key] = place
+                merged_places[place_key] = place
                 continue
             old_point, new_point = previous.get('coordinates'), place.get('coordinates')
             if valid_world_point(old_point) and valid_world_point(new_point):
@@ -1432,6 +1433,28 @@ def extract_one_ai_only(post, media_root=None, ignore_caption=False, content_typ
                 if not valid_world_point(point) or (detailed_korean_address(address) and not valid_korean_point(point)):
                     continue
                 place.update(coordinates=point, coordinate_source='ai_estimate', map_selection='ai_estimate')
+        public_candidates = [place for place in places
+                             if not valid_world_point(place.get('coordinates'))
+                             and place.get('name') and place.get('address')][:8]
+        counts['ai_public_lookup_places'] = len(public_candidates)
+        if public_candidates and key:
+            def research_place(place):
+                return lookup_published_location(
+                    place['name'], place['address'], settings,
+                    lambda request: request_json_with_retry(request, timeout=15),
+                    ADDRESS, compatible_place_addresses)
+            with measure_stage(context, 'ai_public_location'):
+                with ThreadPoolExecutor(max_workers=min(3, len(public_candidates))) as pool:
+                    published = list(pool.map(research_place, public_candidates))
+            for place, found in zip(public_candidates, published):
+                if not found or not detailed_korean_address(found['address']):
+                    continue
+                point = found['coordinates']
+                if not valid_korean_point(point):
+                    continue
+                place.update(address=found['address'], coordinates=point,
+                             coordinate_source='ai_web_source', map_selection='ai_web_source',
+                             location_source_url=found['source_url'])
         counts['ai_location_estimated'] = sum(valid_world_point(place.get('coordinates')) for place in places)
         if len(summaries) == 1:
             ai_title, ai_summary, _ = normalize_ai_summary(

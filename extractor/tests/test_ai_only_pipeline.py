@@ -126,6 +126,7 @@ class AiOnlyPipelineTests(unittest.TestCase):
              patch('place_server.prepare_images', return_value=([], [])), \
              patch('place_server.transcribe_videos', return_value=([], [])), \
              patch('place_server.analyze_content', return_value=(bundle, None)), \
+             patch('place_server.estimate_locations', return_value=({}, None)), \
              patch('place_server.classify_content', return_value={'source': 'openai_decisions'}):
             result = extract_one({'post_id': 'ig_Test123',
                                   'source_url': 'https://www.instagram.com/p/Test123/',
@@ -133,6 +134,79 @@ class AiOnlyPipelineTests(unittest.TestCase):
         self.assertEqual(result['status'], 'extracted')
         self.assertEqual(result['map_locations'], [])
         self.assertFalse(result['places'][0]['needs_review'])
+
+    def test_missing_coordinate_is_filled_by_selected_ai_provider(self):
+        bundle = {'places': [{'name': '서울숲', 'address': '서울특별시 성동구 뚝섬로 273',
+                              'source': 'caption', 'evidence': '서울숲 서울특별시 성동구 뚝섬로 273',
+                              'evidence_file': '', 'time_seconds': None, 'uncertain': False,
+                              'latitude': None, 'longitude': None}],
+                  'events': [], 'title': '서울숲', 'summary': '서울숲의 산책 장소를 소개합니다.'}
+        estimate = {0: {'index': 0, 'address': '서울특별시 성동구 뚝섬로 273',
+                        'latitude': 37.5446, 'longitude': 127.0374}}
+        context = {}
+        with patch.dict(os.environ, {'PINMAP_AI_ONLY_ANALYSIS': '1'}), \
+             patch('place_server.ai_settings', return_value={'MULTIUSER_AI_PROVIDER': 'openai',
+                                                              'OPENAI_API_KEY': 'test'}), \
+             patch('place_server.media_files', return_value=[]), \
+             patch('place_server.prepare_images', return_value=([], [])), \
+             patch('place_server.transcribe_videos', return_value=([], [])), \
+             patch('place_server.analyze_content', return_value=(bundle, None)), \
+             patch('place_server.estimate_locations', return_value=(estimate, None)) as geocode, \
+             patch('place_server.classify_content', return_value={'source': 'openai_decisions'}):
+            result = extract_one({'post_id': 'ig_Test123',
+                                  'source_url': 'https://www.instagram.com/p/Test123/',
+                                  'caption': '서울숲 서울특별시 성동구 뚝섬로 273'},
+                                 analysis_context=context)
+        geocode.assert_called_once()
+        self.assertEqual(len(result['map_locations']), 1)
+        self.assertEqual(result['map_locations'][0]['coordinates'],
+                         {'lat': 37.5446, 'lng': 127.0374})
+        self.assertFalse(result['map_locations'][0]['review_required'])
+        self.assertEqual(context['counts']['ai_location_estimated'], 1)
+
+    def test_ai_geocode_cannot_replace_a_place_with_another_address(self):
+        bundle = {'places': [{'name': '서울숲', 'address': '서울특별시 성동구 뚝섬로 273',
+                              'source': 'caption', 'evidence': '서울숲 서울특별시 성동구 뚝섬로 273',
+                              'evidence_file': '', 'time_seconds': None, 'uncertain': False,
+                              'latitude': None, 'longitude': None}],
+                  'events': [], 'title': '서울숲', 'summary': '서울숲의 산책 장소를 소개합니다.'}
+        wrong = {0: {'index': 0, 'address': '서울특별시 종로구 삼청로 30',
+                     'latitude': 37.5796, 'longitude': 126.977}}
+        with patch.dict(os.environ, {'PINMAP_AI_ONLY_ANALYSIS': '1'}), \
+             patch('place_server.ai_settings', return_value={'MULTIUSER_AI_PROVIDER': 'openai',
+                                                              'OPENAI_API_KEY': 'test'}), \
+             patch('place_server.media_files', return_value=[]), \
+             patch('place_server.prepare_images', return_value=([], [])), \
+             patch('place_server.transcribe_videos', return_value=([], [])), \
+             patch('place_server.analyze_content', return_value=(bundle, None)), \
+             patch('place_server.estimate_locations', return_value=(wrong, None)), \
+             patch('place_server.classify_content', return_value={'source': 'rules'}):
+            result = extract_one({'post_id': 'ig_Test123',
+                                  'source_url': 'https://www.instagram.com/p/Test123/',
+                                  'caption': '서울숲 서울특별시 성동구 뚝섬로 273'})
+        self.assertEqual(result['map_locations'], [])
+
+    def test_ai_geocode_can_add_a_korean_parcel_address(self):
+        bundle = {'places': [{'name': '서울숲', 'address': '', 'source': 'caption',
+                              'evidence': '서울숲', 'evidence_file': '', 'time_seconds': None,
+                              'uncertain': False, 'latitude': None, 'longitude': None}],
+                  'events': [], 'title': '서울숲', 'summary': '서울숲의 산책 장소를 소개합니다.'}
+        estimate = {0: {'index': 0, 'address': '서울특별시 성동구 성수동1가 산 5-1',
+                        'latitude': 37.544553, 'longitude': 127.037477}}
+        with patch.dict(os.environ, {'PINMAP_AI_ONLY_ANALYSIS': '1'}), \
+             patch('place_server.ai_settings', return_value={'MULTIUSER_AI_PROVIDER': 'openai',
+                                                              'OPENAI_API_KEY': 'test'}), \
+             patch('place_server.media_files', return_value=[]), \
+             patch('place_server.prepare_images', return_value=([], [])), \
+             patch('place_server.transcribe_videos', return_value=([], [])), \
+             patch('place_server.analyze_content', return_value=(bundle, None)), \
+             patch('place_server.estimate_locations', return_value=(estimate, None)), \
+             patch('place_server.classify_content', return_value={'source': 'rules'}):
+            result = extract_one({'post_id': 'ig_Test123',
+                                  'source_url': 'https://www.instagram.com/p/Test123/',
+                                  'caption': '서울숲'})
+        self.assertEqual(result['places'][0]['address'], '서울특별시 성동구 성수동1가 산 5-1')
+        self.assertEqual(len(result['map_locations']), 1)
 
     def test_visual_event_date_is_read_by_ai_without_ocr_review_notice(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -26,6 +26,13 @@ test('public event schedule remains separate from map places in the saved job re
   assert.deepEqual(mapped.result.events,[event]);
   assert.deepEqual(mapped.result.map_location.locations,[]);
 });
+test('AI-only map locations retain their no-review state in saved jobs',()=>{
+  const location={name:'서울숲',address:'서울 성동구 왕십리로 273',coordinates:{lat:37.544,lng:127.038},coordinate_source:'ai_estimate',review_required:false};
+  const mapped=desktopPlaceResult({route:'ai_api',status:'extracted',places:[{name:location.name,address:location.address}],map_locations:[location],events:[],notes:[]});
+  assert.equal(mapped.result.map_location.status,'located');
+  assert.equal(mapped.result.map_location.locations[0].review_required,false);
+  assert.equal(mapped.result.map_location.locations[0].provider,'ai_estimate');
+});
 test('accounts isolate ZIP posts, assets, jobs, and results',async()=>{
   const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'pinmap-multi-'));
   const app=await createMultiuserApp({dataDir,env:{MULTIUSER_PORT:'0',PINMAP_INVITE_CODE:'invite-test-code',MULTIUSER_AI_PROVIDER:'ollama'}});

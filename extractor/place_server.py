@@ -1087,23 +1087,30 @@ def ai_post_summary(caption, observed_text, places, events=None, images=(), tran
 
 
 
-def normalize_ai_places(parsed, images, transcripts):
+def normalize_ai_places(parsed, images, transcripts, ai_only=False):
     places = []
     known_files = {img['source_file'] for img in images} | {t['source_file'] for t in transcripts}
     for item in parsed.get('places', []):
+        if ai_only and item.get('source') == 'ocr':
+            continue
         name, address, quote = item['name'].strip(), item['address'].strip(), item['evidence'].strip()
         evidence_file = item['evidence_file'].strip()
         if evidence_file and evidence_file not in known_files:
             continue
         if item['source'] != 'caption' and not evidence_file:
             continue
-        if address and not ADDRESS.search(address):
+        if address and not ai_only and not ADDRESS.search(address):
             address = ''
         if not quote or not (name or address):
             continue
-        places.append({'name': name or None, 'address': address or None, 'source': 'ai_api',
-                       'evidence': {'kind': item['source'], 'file': evidence_file or None,
-                                    'time_seconds': item['time_seconds'], 'quote': quote}, 'needs_review': True})
+        place = {'name': name or None, 'address': address or None, 'source': 'ai_api',
+                 'evidence': {'kind': item['source'], 'file': evidence_file or None,
+                              'time_seconds': item['time_seconds'], 'quote': quote},
+                 'needs_review': not ai_only}
+        point = {'lat': item.get('latitude'), 'lng': item.get('longitude')}
+        if ai_only and valid_world_point(point) and (not ADDRESS.search(address) or valid_korean_point(point)):
+            place.update(coordinates=point, coordinate_source='ai_estimate', map_selection='ai_estimate')
+        places.append(place)
     return dedupe(places), None
 
 
@@ -1142,6 +1149,8 @@ def caption_analysis_policy(caption, content_types, places=None, events=None):
 
 
 def extract_one(post, media_root=None, ignore_caption=False, content_types=('place',), analysis_context=None):
+    if os.getenv('PINMAP_AI_ONLY_ANALYSIS', '0') == '1':
+        return extract_one_ai_only(post, media_root, ignore_caption, content_types, analysis_context)
     context = analysis_context if analysis_context is not None else {}
     context.setdefault('counts', {})
     post_id = post['post_id']
@@ -1247,6 +1256,155 @@ def extract_one(post, media_root=None, ignore_caption=False, content_types=('pla
             'media_files': [p.name for p in files], 'places': places,
             'map_locations': map_locations, 'observed_text': observed_text, 'screen_text': screen_text,
             'audio_transcripts': audio_transcripts, 'notes': notes}
+
+
+def extract_one_ai_only(post, media_root=None, ignore_caption=False, content_types=('place',), analysis_context=None):
+    """Analyze every collected visual segment through bounded AI API chunks."""
+    context = analysis_context if analysis_context is not None else {}
+    counts = context.setdefault('counts', {})
+    caption = '' if ignore_caption else post.get('caption', '')
+    files = media_files(media_root, post['post_id'])
+    notes, places, events, summaries = [], [], [], []
+    settings = ai_settings()
+    provider = settings.get('MULTIUSER_AI_PROVIDER', 'openai')
+    key = settings.get('GEMINI_API_KEY' if provider == 'gemini' else 'OPENAI_API_KEY', '').strip()
+    context['ocr_rows'] = []
+    counts.update(ai_only=1, ocr_images=0, ocr_skipped=1)
+    context.setdefault('timings', {})['ocr'] = 0
+    try:
+        chunk_size = max(1, min(12, int(os.getenv('PINMAP_AI_CHUNK_SIZE', '8'))))
+        workers = max(1, min(3, int(os.getenv('PINMAP_AI_CHUNK_WORKERS', '3'))))
+    except ValueError:
+        chunk_size, workers = 8, 3
+    with tempfile.TemporaryDirectory(prefix='pinmap-ai-media-') as temp:
+        work = Path(temp)
+        with measure_stage(context, 'prepare_media'):
+            images, media_notes = prepare_images(files, work)
+            # Keep every frame. Re-encode only oversized photos so each chunk
+            # remains below the provider's request-size budget.
+            ffmpeg = ffmpeg_bin()
+            prepared = []
+            for index, image in enumerate(images):
+                try:
+                    size = Path(image['path']).stat().st_size
+                except OSError:
+                    notes.append('이미지 파일 일부를 읽지 못했습니다.')
+                    continue
+                if size > 1200000 and ffmpeg:
+                    for width in (960, 720, 480):
+                        smaller = work / ('ai-frame-%03d-%d.jpg' % (index, width))
+                        try:
+                            converted = subprocess.run([ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
+                                '-i', image['path'], '-frames:v', '1', '-vf', 'scale=%d:-2' % width,
+                                '-q:v', '9', str(smaller)], capture_output=True, timeout=12)
+                            if converted.returncode == 0 and smaller.is_file() and smaller.stat().st_size <= 1200000:
+                                image = {**image, 'path': str(smaller)}
+                                size = smaller.stat().st_size
+                                break
+                        except (OSError, subprocess.TimeoutExpired):
+                            continue
+                if size <= 1200000:
+                    prepared.append(image)
+                else:
+                    notes.append('이미지 용량 제한으로 일부 장면을 AI에 전달하지 못했습니다.')
+            counts['ai_media_images_skipped'] = len(images) - len(prepared)
+            images = prepared
+        notes.extend(media_notes)
+        counts['ai_media_images'] = len(images)
+        with measure_stage(context, 'audio'):
+            transcripts, audio_notes = transcribe_videos(files, work)
+        notes.extend(audio_notes)
+        chunks = [images[index:index + chunk_size] for index in range(0, len(images), chunk_size)] or [[]]
+        counts['ai_media_chunks'] = len(chunks)
+        counts['ai_media_chunk_workers'] = min(workers, len(chunks))
+        if not key:
+            notes.append('AI API 키가 없어 콘텐츠를 분석하지 못했습니다.')
+            bundles = [(None, 'AI API 키 없음') for _ in chunks]
+        else:
+            def analyze_chunk(index_and_chunk):
+                index, chunk = index_and_chunk
+                started = time.monotonic()
+                try:
+                    return analyze_content(caption, [], chunk, transcripts, [], [],
+                        'place' in content_types, 'event' in content_types, settings, request_json_with_retry,
+                        ai_coordinates=True)
+                finally:
+                    print(json.dumps({'stage': 'analysis_timing', 'step': 'ai_media_chunk',
+                                      'chunk': index + 1, 'images': len(chunk),
+                                      'seconds': round(time.monotonic() - started, 3)}),
+                          file=sys.stderr, flush=True)
+            with measure_stage(context, 'ai_media'):
+                with ThreadPoolExecutor(max_workers=min(workers, len(chunks))) as pool:
+                    bundles = list(pool.map(analyze_chunk, enumerate(chunks)))
+        counts['ai_media_chunk_failures'] = sum(bundle is None for bundle, _ in bundles)
+        for index, ((bundle, error), chunk) in enumerate(zip(bundles, chunks)):
+            if bundle is None:
+                notes.append('AI 구간 %d 분석 실패: %s' % (index + 1, error or '응답 없음'))
+                continue
+            new_places, _ = normalize_ai_places(bundle, chunk, transcripts, ai_only=True)
+            new_events, _ = normalize_ai_events(bundle, caption, [], transcripts, chunk, ai_only=True)
+            places.extend(new_places)
+            events.extend({**event, 'needs_review': False, 'notes': []}
+                          for event in new_events if event.get('start_date') and not event.get('notes'))
+            summaries.append((bundle['title'], bundle['summary']))
+        merged_places = {}
+        for place in places:
+            key = (normalized_place_name(place.get('name')), normalized_place_name(place.get('address')))
+            previous = merged_places.get(key)
+            if previous is None:
+                merged_places[key] = place
+                continue
+            old_point, new_point = previous.get('coordinates'), place.get('coordinates')
+            if valid_world_point(old_point) and valid_world_point(new_point):
+                meters = math.hypot((old_point['lat'] - new_point['lat']) * 111000,
+                                    (old_point['lng'] - new_point['lng']) * 88000)
+                if meters > 150:
+                    previous.pop('coordinates', None)
+                    previous.pop('coordinate_source', None)
+                    previous['coordinate_conflict'] = True
+            elif not previous.get('coordinate_conflict') and valid_world_point(new_point):
+                previous.update(coordinates=new_point, coordinate_source='ai_estimate')
+        places = dedupe(list(merged_places.values()))
+        events = dedupe_events(events)
+        if places and events:
+            places = without_event_title_places(places, events)
+        if len(summaries) == 1:
+            ai_title, ai_summary, _ = normalize_ai_summary(
+                {'title': summaries[0][0], 'summary': summaries[0][1]})
+        elif summaries:
+            observations = [{'file': 'chunk-%d' % index, 'time_seconds': None, 'lines': [summary]}
+                            for index, (_title, summary) in enumerate(summaries, 1)]
+            with measure_stage(context, 'ai_summary'):
+                ai_title, ai_summary, error = ai_post_summary(caption, observations, places, events,
+                                                              images[:8], transcripts)
+            if error:
+                notes.append(error)
+                counts['ai_summary_failed'] = 1
+                ai_title, ai_summary = summaries[0]
+        else:
+            ai_title = ai_summary = None
+    counts['ai_pipeline_calls'] = len(chunks) + int(len(summaries) > 1)
+    counts['ai_strategy'] = 'all_media_chunks'
+    if places and any(not valid_world_point(place.get('coordinates')) for place in places):
+        notes.append('정확한 좌표가 없는 장소는 지도 핀을 만들지 않았습니다.')
+    map_locations = map_locations_from_places(places)
+    classification_text = '\n'.join([caption, ai_title or '', ai_summary or ''] +
+                                    [part.get('text', '') for part in transcripts])
+    with measure_stage(context, 'classification'):
+        classification = classify_content(classification_text, settings)
+    counts['classification_source'] = classification.get('source')
+    complete = (ai_title and ai_summary and not counts['ai_media_chunk_failures']
+                and not counts['ai_media_images_skipped'] and not counts.get('ai_summary_failed'))
+    status = 'extracted' if complete else 'needs_media_or_ai'
+    content_kind = 'mixed' if places and events else 'place' if places else 'event' if events else 'unknown'
+    return {'post_id': post['post_id'], 'source_url': post['source_url'], 'status': status,
+            'ai_title': ai_title, 'ai_summary': ai_summary,
+            'author_username': post.get('author_username'),
+            'author_profile_data_url': post.get('author_profile_data_url'),
+            'route': 'ai_api', 'content_kind': content_kind, 'classification': classification,
+            'events': events, 'media_files': [path.name for path in files], 'places': places,
+            'map_locations': map_locations, 'observed_text': [], 'screen_text': [],
+            'audio_transcripts': transcripts, 'notes': notes}
 
 
 def complete_ai_analysis(caption, rows, images, transcripts, screen_text, places, events,
@@ -1589,22 +1747,34 @@ def extract_link(url, ignore_caption=False, content_types=None):
         print('1/3 게시물 링크와 캡션 확인 중...', file=sys.stderr, flush=True)
         context = {}
         analysis_started = time.monotonic()
-        with measure_stage(context, 'collect_caption'):
-            observed = collect_link(url, 'caption', media_root, browser_profile)
+        # Place analysis always needs reel media. Collect it once and reuse its
+        # caption instead of launching a second browser for the same post.
+        ai_only = os.getenv('PINMAP_AI_ONLY_ANALYSIS', '0') == '1'
+        media_first = ai_only or ('place' in types and bool(re.search(r'/(?:reel|tv)/', url)))
+        first_mode = 'media' if media_first else 'caption'
+        with measure_stage(context, 'collect_media' if media_first else 'collect_caption'):
+            observed = collect_link(url, first_mode, media_root, browser_profile)
+        media_notes = []
+        if media_first and observed.get('status') != 'collected':
+            media_notes = observed.get('notes', [])
+            with measure_stage(context, 'collect_caption'):
+                observed = collect_link(url, 'caption', media_root, browser_profile)
+        elif media_first:
+            context.setdefault('timings', {})['collect_caption'] = 0
         if observed.get('status') != 'collected':
             return {'schema_version': 1, 'place_only_test': place_only, 'category_classification': False,
                     'input': 'instagram_link', 'results': [{'post_id': observed.get('post_id'),
                     'source_url': url, 'status': 'collection_failed', 'content_kind': 'unknown',
                     'places': [], 'events': [], 'map_locations': [], 'notes': observed.get('notes', [])}]}
         caption = '' if ignore_caption else observed.get('caption', '')
-        candidates = caption_places(caption) if 'place' in types else []
-        caption_complete, _ = caption_analysis_policy(caption, types, candidates)
-        notes = observed.get('notes', [])
-        need_media = 'place' in types or not caption_complete
+        candidates = caption_places(caption) if 'place' in types and not ai_only else []
+        caption_complete, _ = (False, 'ai_only') if ai_only else caption_analysis_policy(caption, types, candidates)
+        notes = media_notes + observed.get('notes', [])
+        need_media = ai_only or 'place' in types or not caption_complete
         if caption_complete and not need_media:
             context.setdefault('counts', {})['media_skipped_due_caption'] = 1
             context.setdefault('timings', {})['collect_media'] = 0
-        if need_media:
+        if need_media and not media_first:
             print('2/3 사진·영상 원본 수집 중...', file=sys.stderr, flush=True)
             try:
                 with measure_stage(context, 'collect_media'):
@@ -1625,13 +1795,15 @@ def extract_link(url, ignore_caption=False, content_types=None):
                 'author_profile_data_url': observed.get('author_profile_data_url')}
         print('3/3 콘텐츠 분석 중... 미디어가 많으면 몇 분 걸릴 수 있습니다.', file=sys.stderr, flush=True)
         result = extract_one(post, media_root, ignore_caption, types, analysis_context=context)
+        if ai_only and media_notes:
+            result['status'] = 'needs_media_or_ai'
         media_dir = media_root / observed['post_id']
         with measure_stage(context, 'place_images'):
             if result.get('map_locations') and media_dir.is_dir():
                 with track_ai_cache(context.setdefault('counts', {})):
                     # Keep the caption fast path's OCR skip. The visual matcher
                     # can pair carousel slides without re-reading all text.
-                    attach_location_images(result, media_dir, ocr_rows=[] if context.get('counts', {}).get('caption_fast_path') else context.get('ocr_rows'))
+                    attach_location_images(result, media_dir, ocr_rows=[] if ai_only or context.get('counts', {}).get('caption_fast_path') else context.get('ocr_rows'))
         cover = next((p for p in media_dir.glob('link-cover.*') if p.suffix.lower() in IMAGE_EXT), None)
         if cover and ffmpeg_bin():
             with tempfile.TemporaryDirectory(prefix='pinmap-cover-') as cover_temp:
@@ -1802,6 +1974,7 @@ def print_results(result):
                     'audio_transcript': '음성 전사', 'ai_api': 'AI API'}
     for post in result['results']:
         places = post.get('places', [])
+        ai_only = post.get('route') == 'ai_api'
         print('\n게시물:', post.get('source_url') or post.get('post_id'))
         print('상태:', status_names.get(post.get('status'), post.get('status')))
         print('장소:', len(places), '곳')
@@ -1812,18 +1985,21 @@ def print_results(result):
                 origin += ' / ' + evidence['file']
             if evidence.get('time_seconds') is not None:
                 origin += ' / %s초' % evidence['time_seconds']
-            print('%d. %s' % (index, place.get('name') or '이름 확인 필요'))
+            print('%d. %s' % (index, place.get('name') or ('이름 없음' if ai_only else '이름 확인 필요')))
             if place.get('area_hint'):
                 print('   게시물의 지역 단서:', place['area_hint'])
             if place.get('search_keyword'):
                 print('   검색 키워드:', place['search_keyword'])
-            print('   주소:', place.get('address') or '주소 확인 필요')
+            print('   주소:', place.get('address') or ('주소 없음' if ai_only else '주소 확인 필요'))
             if place.get('address_source'):
                 print('   주소 출처:', {'naver_local_search': '네이버 지역 검색', 'google_places': 'Google Places',
                                    'photon_openstreetmap': 'OpenStreetMap 장소 검색'}.get(place['address_source'], place['address_source']))
             if valid_korean_point(place.get('coordinates')):
                 print('   지도 좌표: %.6f, %.6f' % (place['coordinates']['lat'], place['coordinates']['lng']))
-                print('   위치 선택:', '동명이점 재확인 필요' if place.get('map_selection') == 'tentative' else '유력 후보 · 확인 필요')
+                if ai_only:
+                    print('   위치 선택: AI 추출 좌표')
+                else:
+                    print('   위치 선택:', '동명이점 재확인 필요' if place.get('map_selection') == 'tentative' else '유력 후보 · 확인 필요')
             print('   근거:', origin)
             lookup = place.get('map_lookup') or {}
             if lookup.get('status') == 'not_found':

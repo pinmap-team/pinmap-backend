@@ -248,7 +248,7 @@ def ai_extract_events(caption, rows, transcripts, images, settings, requester):
         return [], '행사 일정 AI 분석 실패: ' + str(exc)[:160]
 
 
-def normalize_ai_events(parsed, caption, rows, transcripts, images):
+def normalize_ai_events(parsed, caption, rows, transcripts, images, ai_only=False):
     image_files = {row.get('source_file') for row in rows} | {img['source_file'] for img in images}
     audio_files = {part.get('source_file') for part in transcripts}
     found = []
@@ -271,6 +271,9 @@ def normalize_ai_events(parsed, caption, rows, transcripts, images):
                                 for line in row.get('lines', [])) + ' ' +
                        ' '.join(part.get('text', '') for part in transcripts
                                 if part.get('source_file') == filename))
+        if ai_only and source in ('image', 'video_frame'):
+            # In this mode the model's exact visual quotation replaces OCR.
+            source_text = quote
         if source in ('audio', 'ocr') and quote not in source_text:
             continue
         raw_date = item.get('date_text')

@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 
 from ocr_tesseract import parse_tsv, read_tesseract_images
@@ -12,6 +14,65 @@ TSV = ("level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidt
 
 
 class TesseractOcrTests(unittest.TestCase):
+    def test_long_reel_batches_run_concurrently_and_keep_original_order(self):
+        images = [{'path': f'/tmp/{i}.jpg', 'source_file': f'{i}.jpg',
+                   'time_seconds': float(i)} for i in range(4)]
+        rendezvous = Barrier(2)
+        calls = []
+        def runner(command, **_kwargs):
+            calls.append(command)
+            self.assertEqual(len(Path(command[1]).read_text().splitlines()), 2)
+            rendezvous.wait(timeout=2)
+            lines = TSV.splitlines()
+            pages = [lines[0]]
+            for index in range(1, 3):
+                for line in lines[1:]:
+                    columns = line.split('\t')
+                    columns[1] = str(index)
+                    pages.append('\t'.join(columns))
+            return SimpleNamespace(returncode=0, stdout='\n'.join(pages) + '\n')
+        rows, notes = read_tesseract_images(images, executable='tesseract',
+                                            runner=runner, batch_size=2, max_workers=2)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([row['source_file'] for row in rows], ['0.jpg', '1.jpg', '2.jpg', '3.jpg'])
+        self.assertEqual(notes, [])
+
+    def test_batch_ocr_preserves_each_image_and_frame_time(self):
+        images = [{'path': f'/tmp/frame-{i}.jpg', 'source_file': f'frame-{i}.jpg',
+                   'time_seconds': float(i)} for i in range(3)]
+        calls = []
+        def runner(command, **_kwargs):
+            calls.append(command)
+            self.assertEqual(Path(command[1]).read_text().splitlines(),
+                             [image['path'] for image in images])
+            lines = TSV.splitlines()
+            pages = [lines[0]]
+            for index in range(1, 4):
+                for line in lines[1:]:
+                    columns = line.split('\t')
+                    columns[1] = str(index)
+                    pages.append('\t'.join(columns))
+            return SimpleNamespace(returncode=0, stdout='\n'.join(pages) + '\n')
+        rows, notes = read_tesseract_images(images, executable='tesseract',
+                                            runner=runner, batch_size=3)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([row['source_file'] for row in rows], [image['source_file'] for image in images])
+        self.assertEqual([row['time_seconds'] for row in rows], [0.0, 1.0, 2.0])
+        self.assertEqual(notes, [])
+
+    def test_incomplete_batch_retries_each_image(self):
+        images = [{'path': f'/tmp/{i}.jpg', 'source_file': f'{i}.jpg',
+                   'time_seconds': i} for i in range(2)]
+        calls = []
+        def runner(command, **_kwargs):
+            calls.append(command)
+            return SimpleNamespace(returncode=0, stdout=TSV)
+        rows, notes = read_tesseract_images(images, executable='tesseract',
+                                            runner=runner, batch_size=2)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual([row['source_file'] for row in rows], ['0.jpg', '1.jpg'])
+        self.assertEqual(notes, [])
+
     def test_tsv_preserves_lines_frame_time_and_normalized_boxes(self):
         image = {'path': '/tmp/frame.jpg', 'source_file': 'video-frame-001000ms.jpg',
                  'time_seconds': 1.0}

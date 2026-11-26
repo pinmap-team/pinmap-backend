@@ -16,6 +16,33 @@ SETTINGS = {'MULTIUSER_AI_PROVIDER': 'gemini', 'MULTIUSER_MODEL': 'gemini-2.5-fl
 
 
 class AnalysisPerformanceTests(unittest.TestCase):
+    def test_long_video_ai_sampling_covers_the_duration_with_fewer_frames(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            video = root / 'reel.mp4'
+            video.write_bytes(b'video')
+            commands = []
+            def run(command, **_kwargs):
+                commands.append(command)
+                return SimpleNamespace(returncode=0)
+            with patch('place_server.ffmpeg_bin', return_value='ffmpeg'), \
+                 patch('place_server.video_duration', return_value=180), \
+                 patch('place_server.subprocess.run', side_effect=run):
+                prepare_images([video], root, max_video_frames=36, frame_interval_seconds=2)
+            self.assertIn('36', commands[0])
+            self.assertIn('fps=0.20000,scale=960:-2', commands[0])
+
+    def test_video_frame_limit_does_not_discard_carousel_slides(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slides = []
+            for index in range(40):
+                slide = root / ('link-slide-%02d.jpg' % index)
+                slide.write_bytes(('slide-%d' % index).encode())
+                slides.append(slide)
+            images, _ = prepare_images(slides, root, max_video_frames=36)
+            self.assertEqual(len(images), 40)
+
     def test_duplicate_cover_is_removed_but_video_timestamps_are_retained(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

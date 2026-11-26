@@ -30,6 +30,7 @@ from event_extraction import (normalize_ai_events, ai_extract_events, dedupe_eve
                               extract_text_events)
 from ai_request_cache import cached_ai_response, track_ai_cache
 from ai_input import compact_analysis_input, compact_text
+from ai_geocode import estimate_locations
 from ocr_tesseract import read_tesseract_images
 from content_ai import analyze_content
 from decisions import enabled as decisions_enabled, classify as classify_content, verify_maps
@@ -41,6 +42,7 @@ ENTRY = 'your_instagram_activity/saved/saved_posts.json'
 MAX_ZIP = 40 * 1024 * 1024
 REGION = r'(?:서울(?:특별시)?|부산(?:광역시)?|대구(?:광역시)?|인천(?:광역시)?|광주(?:광역시)?|대전(?:광역시)?|울산(?:광역시)?|세종(?:특별자치시)?|경기도?|강원(?:특별자치도|도)?|충청[남북]도|충[남북]|전라[남북]도|전북(?:특별자치도)?|전남|경상[남북]도|경[남북]|제주(?:특별자치도|도)?)'
 ADDRESS = re.compile(REGION + r'\s+(?:(?:[가-힣0-9]+(?:시|군|구))\s+){0,3}[가-힣0-9·.]+(?:로|길|동|리)\s*\d+(?:-\d+)?(?:\s*\d+층)?')
+PARCEL_ADDRESS = re.compile(REGION + r'\s+(?:(?:[가-힣0-9]+(?:시|군|구))\s+){0,3}[가-힣0-9]+(?:동|읍|면|리)(?:\d+가)?\s+(?:산\s*)?\d+(?:-\d+)?')
 POST_URL = re.compile(r'^https://(?:www\.)?instagram\.com/(?:p|reel|tv)/([A-Za-z0-9_-]+)/?$')
 NUMBERED = re.compile(r'^[❶-❿➀-➉①-⑳➊-➓\d]+[.)\s]*')
 IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.webp'}
@@ -213,6 +215,10 @@ def valid_world_point(point):
             and all(isinstance(point.get(axis), (int, float)) and not isinstance(point.get(axis), bool)
                     and math.isfinite(point[axis]) for axis in ('lat', 'lng'))
             and -90 <= point['lat'] <= 90 and -180 <= point['lng'] <= 180)
+
+
+def detailed_korean_address(address):
+    return bool(address and (ADDRESS.search(address) or PARCEL_ADDRESS.search(address)))
 
 
 def photon_features(query, opener=None):
@@ -652,7 +658,7 @@ def video_duration(ffmpeg, media):
     return None
 
 
-def prepare_images(files, work):
+def prepare_images(files, work, max_video_frames=120, frame_interval_seconds=0.5):
     images = []
     notes = []
     ffmpeg = ffmpeg_bin()
@@ -665,11 +671,11 @@ def prepare_images(files, work):
                            'time_seconds': time_seconds, 'kind': 'video_frame' if time_seconds is not None else 'image'})
         elif ffmpeg:
             duration = video_duration(ffmpeg, media)
-            fps = min(2.0, 120.0 / duration) if duration and duration > 0 else 1.0
-            fps = max(0.1, fps)
+            fps = min(1.0 / frame_interval_seconds, max_video_frames / duration) if duration and duration > 0 else min(1.0, 1.0 / frame_interval_seconds)
+            fps = max(0.01, fps)
             pattern = work / (media.stem + '-frame-%03d.jpg')
             command = [ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-i', str(media),
-                       '-vf', 'fps=%.5f,scale=960:-2' % fps, '-frames:v', '120', str(pattern)]
+                       '-vf', 'fps=%.5f,scale=960:-2' % fps, '-frames:v', str(max_video_frames), str(pattern)]
             completed = subprocess.run(command, capture_output=True, text=True, timeout=180)
             if completed.returncode:
                 notes.append(media.name + ': 영상 프레임 추출 실패')
@@ -678,8 +684,8 @@ def prepare_images(files, work):
                 for number, frame in enumerate(frames):
                     images.append({'path': str(frame), 'source_file': media.name,
                                    'time_seconds': round(number / fps, 3), 'kind': 'video_frame'})
-                if duration is None or duration > 60:
-                    notes.append(media.name + ': 전체 길이에 맞춰 최대 120프레임을 표본으로 읽었습니다.')
+                if duration is None or duration > max_video_frames * frame_interval_seconds:
+                    notes.append(media.name + ': 전체 길이에 맞춰 최대 %d프레임을 표본으로 읽었습니다.' % max_video_frames)
         else:
             notes.append('FFmpeg가 없어 영상 프레임을 읽지 못했습니다.')
     seen, unique = set(), []
@@ -1108,7 +1114,7 @@ def normalize_ai_places(parsed, images, transcripts, ai_only=False):
                               'time_seconds': item['time_seconds'], 'quote': quote},
                  'needs_review': not ai_only}
         point = {'lat': item.get('latitude'), 'lng': item.get('longitude')}
-        if ai_only and valid_world_point(point) and (not ADDRESS.search(address) or valid_korean_point(point)):
+        if ai_only and valid_world_point(point) and (not detailed_korean_address(address) or valid_korean_point(point)):
             place.update(coordinates=point, coordinate_source='ai_estimate', map_selection='ai_estimate')
         places.append(place)
     return dedupe(places), None
@@ -1274,12 +1280,16 @@ def extract_one_ai_only(post, media_root=None, ignore_caption=False, content_typ
     try:
         chunk_size = max(1, min(12, int(os.getenv('PINMAP_AI_CHUNK_SIZE', '8'))))
         workers = max(1, min(3, int(os.getenv('PINMAP_AI_CHUNK_WORKERS', '3'))))
+        video_frames = max(8, min(60, int(os.getenv('PINMAP_AI_VIDEO_MAX_FRAMES', '36'))))
+        video_interval = max(0.5, min(10, float(os.getenv('PINMAP_AI_VIDEO_FRAME_INTERVAL_SECONDS', '2'))))
     except ValueError:
-        chunk_size, workers = 8, 3
+        chunk_size, workers, video_frames, video_interval = 8, 3, 36, 2
+    counts['ai_video_max_frames'] = video_frames
     with tempfile.TemporaryDirectory(prefix='pinmap-ai-media-') as temp:
         work = Path(temp)
         with measure_stage(context, 'prepare_media'):
-            images, media_notes = prepare_images(files, work)
+            images, media_notes = prepare_images(files, work, max_video_frames=video_frames,
+                                                 frame_interval_seconds=video_interval)
             # Keep every frame. Re-encode only oversized photos so each chunk
             # remains below the provider's request-size budget.
             ffmpeg = ffmpeg_bin()
@@ -1391,6 +1401,34 @@ def extract_one_ai_only(post, media_root=None, ignore_caption=False, content_typ
         events = dedupe_events(events)
         if places and events:
             places = without_event_title_places(places, events)
+        missing = sum(not valid_world_point(place.get('coordinates')) for place in places)
+        eligible = sum(not valid_world_point(place.get('coordinates')) and
+                       bool(place.get('address') or len(place.get('name') or '') >= 3) for place in places)
+        counts['ai_location_missing'] = missing
+        counts['ai_location_candidates'] = eligible
+        counts['ai_geocode_calls'] = int(bool(eligible and key))
+        if eligible and key:
+            with measure_stage(context, 'ai_geocode'):
+                estimates, location_error = estimate_locations(
+                    places, settings, lambda request: request_json_with_retry(request, timeout=25))
+            if location_error:
+                notes.append(location_error)
+            for index, estimate in estimates.items():
+                place = places[index]
+                old_address = place.get('address') or ''
+                new_address = (estimate.get('address') or '').strip() if isinstance(estimate.get('address'), str) else ''
+                if old_address and new_address and not compatible_place_addresses(old_address, new_address):
+                    continue
+                address = old_address or new_address
+                if not address or (re.match(REGION, address) and not detailed_korean_address(address)):
+                    continue
+                if new_address and not old_address:
+                    place['address'] = new_address
+                point = {'lat': estimate.get('latitude'), 'lng': estimate.get('longitude')}
+                if not valid_world_point(point) or (detailed_korean_address(address) and not valid_korean_point(point)):
+                    continue
+                place.update(coordinates=point, coordinate_source='ai_estimate', map_selection='ai_estimate')
+        counts['ai_location_estimated'] = sum(valid_world_point(place.get('coordinates')) for place in places)
         if len(summaries) == 1:
             ai_title, ai_summary, _ = normalize_ai_summary(
                 {'title': summaries[0][0], 'summary': summaries[0][1]})
@@ -1399,14 +1437,14 @@ def extract_one_ai_only(post, media_root=None, ignore_caption=False, content_typ
                             for index, (_title, summary) in enumerate(summaries, 1)]
             with measure_stage(context, 'ai_summary'):
                 ai_title, ai_summary, error = ai_post_summary(caption, observations, places, events,
-                                                              images[:8], transcripts)
+                                                              [], transcripts)
             if error:
                 notes.append(error)
                 counts['ai_summary_failed'] = 1
                 ai_title, ai_summary = summaries[0]
         else:
             ai_title = ai_summary = None
-    counts['ai_pipeline_calls'] = len(chunks) + int(len(summaries) > 1)
+    counts['ai_pipeline_calls'] = len(chunks) + int(len(summaries) > 1) + counts['ai_geocode_calls']
     counts['ai_strategy'] = 'all_media_chunks'
     if places and any(not valid_world_point(place.get('coordinates')) for place in places):
         notes.append('정확한 좌표가 없는 장소는 지도 핀을 만들지 않았습니다.')

@@ -12,6 +12,33 @@ from place_server import extract_link, extract_one, normalize_ai_places, print_r
 
 
 class AiOnlyPipelineTests(unittest.TestCase):
+    def test_broad_caption_location_is_recovered_from_published_listing(self):
+        bundle = {'places': [{'name': '물의집', 'address': '경기 양평', 'source': 'caption',
+                              'evidence': '물의집 경기 양평', 'evidence_file': '',
+                              'time_seconds': None, 'uncertain': False,
+                              'latitude': None, 'longitude': None}],
+                  'events': [], 'title': '물의집', 'summary': '양평의 물의집을 소개합니다.'}
+        published = {'address': '경기 양평군 강상면 백병길 108-4',
+                     'coordinates': {'lat': 37.48527467674748, 'lng': 127.44971332373018},
+                     'source_url': 'https://polle.com/place/example'}
+        with patch.dict(os.environ, {'PINMAP_AI_ONLY_ANALYSIS': '1'}), \
+             patch('place_server.ai_settings', return_value={'MULTIUSER_AI_PROVIDER': 'openai',
+                                                              'OPENAI_API_KEY': 'test'}), \
+             patch('place_server.media_files', return_value=[]), \
+             patch('place_server.prepare_images', return_value=([], [])), \
+             patch('place_server.transcribe_videos', return_value=([], [])), \
+             patch('place_server.analyze_content', return_value=(bundle, None)), \
+             patch('place_server.estimate_locations', return_value=({}, None)), \
+             patch('place_server.lookup_published_location', return_value=published) as lookup, \
+             patch('place_server.classify_content', return_value={'source': 'rules'}):
+            result = extract_one({'post_id': 'ig_Test123',
+                                  'source_url': 'https://www.instagram.com/p/Test123/',
+                                  'caption': '물의집 경기 양평'}, content_types=('place',))
+        lookup.assert_called_once()
+        self.assertEqual(result['places'][0]['address'], published['address'])
+        self.assertEqual(result['places'][0]['coordinate_source'], 'ai_web_source')
+        self.assertEqual(len(result['map_locations']), 1)
+
     def test_broad_region_does_not_create_an_ai_map_pin(self):
         result = {'places': [{'name': '물의집', 'address': '경기 양평',
                               'source': 'caption', 'evidence': '물의집 | 경기 양평',

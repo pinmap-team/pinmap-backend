@@ -1114,7 +1114,11 @@ def normalize_ai_places(parsed, images, transcripts, ai_only=False):
                               'time_seconds': item['time_seconds'], 'quote': quote},
                  'needs_review': not ai_only}
         point = {'lat': item.get('latitude'), 'lng': item.get('longitude')}
-        if ai_only and valid_world_point(point) and (not detailed_korean_address(address) or valid_korean_point(point)):
+        # A broad region such as "경기 양평" is not enough to place a venue.
+        # The model can otherwise invent a plausible point inside that region.
+        broad_korean_region = bool(re.match(REGION, address) and not detailed_korean_address(address))
+        if (ai_only and not broad_korean_region and valid_world_point(point)
+                and (not detailed_korean_address(address) or valid_korean_point(point))):
             place.update(coordinates=point, coordinate_source='ai_estimate', map_selection='ai_estimate')
         places.append(place)
     return dedupe(places), None

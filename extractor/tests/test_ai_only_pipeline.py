@@ -8,10 +8,20 @@ from threading import Barrier
 import unittest
 from unittest.mock import patch
 
-from place_server import extract_link, extract_one, print_results
+from place_server import extract_link, extract_one, normalize_ai_places, print_results
 
 
 class AiOnlyPipelineTests(unittest.TestCase):
+    def test_broad_region_does_not_create_an_ai_map_pin(self):
+        result = {'places': [{'name': '물의집', 'address': '경기 양평',
+                              'source': 'caption', 'evidence': '물의집 | 경기 양평',
+                              'evidence_file': '', 'time_seconds': None,
+                              'latitude': 37.4875, 'longitude': 127.4902}]}
+        places, error = normalize_ai_places(result, [], [], ai_only=True)
+        self.assertIsNone(error)
+        self.assertEqual(places[0]['address'], '경기 양평')
+        self.assertNotIn('coordinates', places[0])
+
     def test_blank_capture_is_not_sent_to_ai_or_turned_into_a_place(self):
         with tempfile.TemporaryDirectory() as temp:
             frame = Path(temp) / 'blank.jpg'
